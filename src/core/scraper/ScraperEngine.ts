@@ -8,19 +8,10 @@ export class ScraperEngine {
     ) {}
 
     async scrape(url: string) {
-
-        // Fetch page
         const html = await this.httpClient.get(url);
 
-        // Parse HTML
         const $ = cheerio.load(html);
 
-        // Extract data
-        const title = $("title").text().trim();
-
-        return {
-            url,
-            title
-        };
+        return $;
     }
 }

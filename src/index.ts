@@ -2,6 +2,7 @@ import Fastify from "fastify";
 
 import { HttpClient } from "./core/http/HttpClient.js";
 import { ScraperEngine } from "./core/scraper/ScraperEngine.js";
+import { ExtractionEngine } from "./extractors/ExtractionEngine.js";
 import { scrapeRoute } from "./api/routes/scrape.js";
 
 const app = Fastify({
@@ -11,10 +12,11 @@ const app = Fastify({
 // Dependencies
 const httpClient = new HttpClient();
 const scraperEngine = new ScraperEngine(httpClient);
+const extractionEngine = new ExtractionEngine();
 
 // Routes
 app.register(async (app) => {
-    await scrapeRoute(app, scraperEngine);
+    await scrapeRoute(app, scraperEngine, extractionEngine);
 });
 
 const start = async () => {
