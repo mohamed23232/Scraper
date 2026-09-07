@@ -1,13 +1,20 @@
 import Fastify from "fastify";
 
+import { HttpClient } from "./core/http/HttpClient.js";
+import { ScraperEngine } from "./core/scraper/ScraperEngine.js";
+import { scrapeRoute } from "./api/routes/scrape.js";
+
 const app = Fastify({
     logger: true
 });
 
-app.get("/", async () => {
-    return {
-        message: "Scraper API is running"
-    };
+// Dependencies
+const httpClient = new HttpClient();
+const scraperEngine = new ScraperEngine(httpClient);
+
+// Routes
+app.register(async (app) => {
+    await scrapeRoute(app, scraperEngine);
 });
 
 const start = async () => {
