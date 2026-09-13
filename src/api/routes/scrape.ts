@@ -1,8 +1,10 @@
 import type { FastifyInstance } from "fastify";
 import { scrapeRequestSchema } from "../schemas/scrape.schema.js";
 import { ScraperEngine } from "../../core/scraper/ScraperEngine.js";
-import { ExtractionEngine, type ExtractedItem } from "../../extractors/ExtractionEngine.js";
+import { ExtractionEngine } from "../../extractors/ExtractionEngine.js";
 import { ConfigLoader } from "../../core/config/ConfigLoader.js";
+import { TransformPipeline } from "../../transforms/TransformPipeline.js";
+import { applyFieldTransforms } from "../../transforms/applyFieldTransforms.js";
 
 export async function scrapeRoute(
     app: FastifyInstance,
@@ -27,10 +29,13 @@ export async function scrapeRoute(
 
             const $ = await scraperEngine.scrape(body.url);
 
-            let data: string[] | ExtractedItem[];
+            let data: unknown;
 
             if ("config" in body) {
-                data = extractionEngine.extractItems($, body.config.item.selector, body.config.fields);
+
+                const items = extractionEngine.extractItems($, body.config.item.selector, body.config.fields);
+                data = applyFieldTransforms(items, body.config.fields, body.url);
+
             } else if ("website" in body) {
 
                 let config;
@@ -44,13 +49,20 @@ export async function scrapeRoute(
                     });
                 }
 
-                data = extractionEngine.extractItems($, config.item.selector, config.fields);
+                const items = extractionEngine.extractItems($, config.item.selector, config.fields);
+                data = applyFieldTransforms(items, config.fields, body.url);
+
             } else {
-                data = extractionEngine.extract($, {
+
+                const values = extractionEngine.extract($, {
                     selector: body.selector,
                     extract: body.extract,
                     attribute: body.attribute
                 });
+
+                data = values.map(
+                    (value) => TransformPipeline.run(value, body.transform, { baseUrl: body.url })
+                );
             }
 
             return reply.status(200).send({

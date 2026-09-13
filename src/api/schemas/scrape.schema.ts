@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { fieldConfigSchema } from "../../core/config/ScraperConfig.js";
+import { TRANSFORM_NAMES } from "../../transforms/TransformPipeline.js";
 
 const flatRequestSchema = z.object({
     url: z.url(),
@@ -12,7 +13,9 @@ const flatRequestSchema = z.object({
         "attribute"
     ]),
 
-    attribute: z.string().optional()
+    attribute: z.string().optional(),
+
+    transform: z.array(z.enum(TRANSFORM_NAMES)).optional()
 });
 
 const inlineConfigRequestSchema = z.object({

@@ -1,9 +1,11 @@
 import { z } from "zod";
+import { TRANSFORM_NAMES } from "../../transforms/TransformPipeline.js";
 
 export const fieldConfigSchema = z.object({
     selector: z.string().min(1),
     extract: z.enum(["text", "html", "attribute"]),
-    attribute: z.string().optional()
+    attribute: z.string().optional(),
+    transform: z.array(z.enum(TRANSFORM_NAMES)).optional()
 }).refine(
     (field) => field.extract !== "attribute" || !!field.attribute,
     {

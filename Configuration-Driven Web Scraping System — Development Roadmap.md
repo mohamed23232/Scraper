@@ -756,6 +756,8 @@ This becomes very important once you have many website configurations.
 
 # Phase 4 — Transformations
 
+**Status: Complete.**
+
 Raw scraped data is rarely exactly what your application needs.
 
 Example:
@@ -774,17 +776,27 @@ Unity might need:
 
 # 17. Create Transformation System
 
-Create:
+Implemented in:
 
 ```text
 src/
 └── transforms/
-    ├── Transform.ts
+    ├── Transform.ts              (interface + TransformContext)
     ├── TrimTransform.ts
     ├── ParseNumberTransform.ts
     ├── RemoveCurrencyTransform.ts
-    └── AbsoluteUrlTransform.ts
+    ├── AbsoluteUrlTransform.ts
+    ├── TransformPipeline.ts      (name → instance registry, runs the chain)
+    └── applyFieldTransforms.ts   (applies transforms to every item's fields)
 ```
+
+`Transform.apply(value, context)` takes `unknown` in and out — a transform can change a field's *type*, not just reshape a string (`parseNumber` turns `"1,299.99"` into the number `1299.99`), so the transform layer can't stay string-in/string-out the way extractors do. `TransformContext` currently only carries `baseUrl`, since `absoluteUrl` is the one transform that needs anything beyond the raw value — it resolves a relative path (`/images/laptop.jpg`) against the page's URL.
+
+`TRANSFORM_NAMES` (in `TransformPipeline.ts`) is the single source of truth for valid transform names — it's a `const` tuple used both to build the runtime registry and, via `z.enum(TRANSFORM_NAMES)`, to validate the `transform` array in `fieldConfigSchema` (`ScraperConfig.ts`). An unknown transform name is now a Zod validation error (`400`) rather than something that could slip through to a runtime lookup failure.
+
+There's no separate `removeComma` file — the roadmap's example pipeline below shows it as its own step, but `ParseNumberTransform` strips thousands-separator commas itself before calling `Number(...)`, since Milestone 5 only calls for four named transforms (`trim`, `parseNumber`, `removeCurrency`, `absoluteUrl`) and a fifth file just for comma-stripping would've been a needless extra step with no config-level name of its own.
+
+Both `selector`+`extract` fields (flat request mode) and `config`/`website` fields (item mode) accept an optional `transform: string[]`, applied in that exact order via `TransformPipeline.run()`. For item mode, `applyFieldTransforms()` walks each extracted item's fields and reruns the pipeline for any field that declared one — array-valued fields (multiple matches inside one item) get the pipeline applied element-by-element, same as single values.
 
 The configuration could eventually support:
 
@@ -1572,11 +1584,11 @@ You are here.
 ## Milestone 5
 
 ```text
-[ ] Transform system
-[ ] trim
-[ ] parse number
-[ ] remove currency
-[ ] absolute URLs
+[x] Transform system
+[x] trim
+[x] parse number
+[x] remove currency
+[x] absolute URLs
 ```
 
 ---
