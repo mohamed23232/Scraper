@@ -1,12 +1,14 @@
 import type { FastifyInstance } from "fastify";
 import { scrapeRequestSchema } from "../schemas/scrape.schema.js";
 import { ScraperEngine } from "../../core/scraper/ScraperEngine.js";
-import { ExtractionEngine } from "../../extractors/ExtractionEngine.js";
+import { ExtractionEngine, type ExtractedItem } from "../../extractors/ExtractionEngine.js";
+import { ConfigLoader } from "../../core/config/ConfigLoader.js";
 
 export async function scrapeRoute(
     app: FastifyInstance,
     scraperEngine: ScraperEngine,
-    extractionEngine: ExtractionEngine
+    extractionEngine: ExtractionEngine,
+    configLoader: ConfigLoader
 ) {
     app.post("/scrape", async (request, reply) => {
 
@@ -19,23 +21,41 @@ export async function scrapeRoute(
             });
         }
 
+        const body = result.data;
+
         try {
 
-            const $ = await scraperEngine.scrape(
-                result.data.url
-            );
+            const $ = await scraperEngine.scrape(body.url);
 
-            const data = extractionEngine.extract($, {
-                selector: result.data.selector,
-                extract: result.data.extract,
-                ...(result.data.attribute === undefined
-                    ? {}
-                    : { attribute: result.data.attribute })
-            });
+            let data: string[] | ExtractedItem[];
+
+            if ("config" in body) {
+                data = extractionEngine.extractItems($, body.config.item.selector, body.config.fields);
+            } else if ("website" in body) {
+
+                let config;
+
+                try {
+                    config = await configLoader.load(body.website);
+                } catch (error) {
+                    return reply.status(400).send({
+                        success: false,
+                        error: (error as Error).message
+                    });
+                }
+
+                data = extractionEngine.extractItems($, config.item.selector, config.fields);
+            } else {
+                data = extractionEngine.extract($, {
+                    selector: body.selector,
+                    extract: body.extract,
+                    attribute: body.attribute
+                });
+            }
 
             return reply.status(200).send({
                 success: true,
-                url: result.data.url,
+                url: body.url,
                 data
             });
 

@@ -1,0 +1,25 @@
+{
+    "id": "example",
+
+    "website": "https://example.com",
+
+    "scraper": {
+        "type": "static"
+    },
+
+    "item": {
+        "selector": "body"
+    },
+
+    "fields": {
+        "title": {
+            "selector": "h1",
+            "extract": "text"
+        },
+
+        "description": {
+            "selector": "p",
+            "extract": "text"
+        }
+    }
+}

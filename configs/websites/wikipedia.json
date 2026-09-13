@@ -1,0 +1,31 @@
+{
+    "id": "wikipedia",
+
+    "website": "https://www.wikipedia.org/",
+
+    "scraper": {
+        "type": "static"
+    },
+
+    "item": {
+        "selector": ".central-featured-lang"
+    },
+
+    "fields": {
+        "language": {
+            "selector": "strong",
+            "extract": "text"
+        },
+
+        "articleCount": {
+            "selector": "small",
+            "extract": "text"
+        },
+
+        "link": {
+            "selector": "a",
+            "extract": "attribute",
+            "attribute": "href"
+        }
+    }
+}
