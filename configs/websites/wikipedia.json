@@ -1,6 +1,8 @@
 {
     "id": "wikipedia",
 
+    "name": "Wikipedia",
+
     "schemaVersion": 1,
 
     "startUrl": "https://www.wikipedia.org/",

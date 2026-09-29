@@ -1254,16 +1254,31 @@ Unchanged from Phase 5 (`type`, `waitFor`, `timeout`) — `timeout` is now actua
 
 # Phase 8 — Website Configuration Manager
 
+**Status: Complete.**
+
 Once the engine works, you can manage configurations.
 
-Eventually:
+Implemented in:
 
 ```text
-GET    /websites
-GET    /websites/:id
-POST   /websites
-PUT    /websites/:id
-DELETE /websites/:id
+src/
+├── api/
+│   ├── routes/
+│   │   └── websites.ts          (GET/POST/PUT/DELETE /websites)
+│   └── schemas/
+│       └── website.schema.ts    (:id param validation; reuses scraperConfigSchema for bodies)
+│
+└── core/
+    └── config/
+        └── ConfigLoader.ts      (gained list/exists/save/remove alongside load)
+```
+
+```text
+GET    /websites            → [{ id, name, startUrl }, ...]  (invalid files on disk are skipped, not fatal)
+GET    /websites/:id        → the full validated config, 404 if the id doesn't exist
+POST   /websites            → body is a full config (id included); 201, or 409 if that id already exists
+PUT    /websites/:id        → replaces (or creates) the config at :id; 400 if the body's own id disagrees with the URL
+DELETE /websites/:id        → 204, or 404 if the id doesn't exist
 ```
 
 Example:
@@ -1272,24 +1287,29 @@ Example:
 GET /websites
 ```
 
-returns:
+returns (matching what's actually on disk, using each config's optional `name` field, falling back to its `id`):
 
 ```json
-[
-    {
-        "id": "store-a",
-        "name": "Store A"
-    },
-    {
-        "id": "news-a",
-        "name": "News Website"
-    }
-]
+{
+    "success": true,
+    "data": [
+        { "id": "example", "name": "Example Domain", "startUrl": "https://example.com" },
+        { "id": "wikipedia", "name": "Wikipedia", "startUrl": "https://www.wikipedia.org/" }
+    ]
+}
 ```
+
+A config created through `POST /websites` is written straight to `configs/websites/<id>.json` — the same file `ConfigLoader.load()` (used by `/scrape`'s `website` mode) reads. There's no separate storage; the management API and the scraping API share one source of truth.
+
+**One deliberate behavior change this introduced**: an unknown `website` id in `/scrape` now returns `404 CONFIG_NOT_FOUND` instead of `400 INVALID_CONFIGURATION` (from the earlier audit). `ConfigLoader.load()` is shared by both routes, and "this named resource doesn't exist" is standard REST semantics for `GET/PUT/DELETE /websites/:id` — worth knowing if anything was checking for the old `400`.
+
+**Verified live**: created a config for `quotes.toscrape.com/js` (a real JS-rendered site, `scraper.type: "browser"`) purely through `POST /websites`, then successfully ran `/scrape` with `{"website": "quotes-js"}` against it — no file was hand-written. Also verified `409` on a duplicate `POST`, `PUT` updating in place, and `DELETE` actually removing the file from disk (confirmed via `ls`), leaving `example.json`/`wikipedia.json` untouched.
 
 ---
 
 # 23. Scraping by Website ID
+
+**Status: Complete** — done back in Phase 3/6, ahead of this phase; see those sections and §22a for the full request shape (`{"website": "...", "url"?: "..."}`, with `url` optional since the earlier audit — it defaults to the config's `startUrl`).
 
 Instead of Unity sending an entire configuration:
 
@@ -1301,12 +1321,11 @@ with:
 
 ```json
 {
-    "website": "store-a",
-    "url": "https://store-a.com/products"
+    "website": "store-a"
 }
 ```
 
-the backend can load:
+the backend loads:
 
 ```text
 configs/websites/store-a.json
@@ -1607,7 +1626,7 @@ This allows you to create configurations visually instead of manually editing JS
 
 # 25. Project Structure
 
-**Status: below is the actual current tree**, not an aspirational target — kept up to date as phases land. `api/routes/websites.ts`, `api/routes/jobs.ts`, and `workers/` from the original plan don't exist yet (Phases 8, 9/11, 12 respectively); `strategies/ApiStrategy.ts` (a JSON/API-only scraper strategy) was never called for by any phase actually implemented and was dropped from the plan.
+**Status: below is the actual current tree**, not an aspirational target — kept up to date as phases land. `api/routes/jobs.ts` and `workers/` from the original plan don't exist yet (Phases 9/11, 12 respectively); `strategies/ApiStrategy.ts` (a JSON/API-only scraper strategy) was never called for by any phase actually implemented and was dropped from the plan.
 
 ```text
 scraper-system/
@@ -1616,10 +1635,12 @@ scraper-system/
 │   │
 │   ├── api/
 │   │   ├── routes/
-│   │   │   └── scrape.ts
+│   │   │   ├── scrape.ts
+│   │   │   └── websites.ts             (Phase 8: GET/POST/PUT/DELETE /websites)
 │   │   │
 │   │   └── schemas/
-│   │       └── scrape.schema.ts
+│   │       ├── scrape.schema.ts
+│   │       └── website.schema.ts
 │   │
 │   ├── core/
 │   │   ├── scraper/
@@ -1627,7 +1648,7 @@ scraper-system/
 │   │   │
 │   │   ├── config/
 │   │   │   ├── ScraperConfig.ts        (Zod schemas — field/scraper/pagination/site config)
-│   │   │   ├── ConfigLoader.ts         (loads + validates configs/websites/<id>.json)
+│   │   │   ├── ConfigLoader.ts         (load/list/exists/save/remove configs/websites/<id>.json)
 │   │   │   └── featureFlags.ts         (ALLOW_INLINE_CONFIGS)
 │   │   │
 │   │   ├── errors/
@@ -1681,7 +1702,7 @@ scraper-system/
 │   │   └── buildApp.ts                 (in-process Fastify app for route tests)
 │   ├── fixtures/                       (saved HTML — no test depends on a live site)
 │   ├── setup.ts
-│   └── *.test.ts
+│   └── *.test.ts                       (65 tests across 8 files)
 │
 ├── package.json
 ├── tsconfig.json
@@ -1689,7 +1710,7 @@ scraper-system/
 └── .gitignore
 ```
 
-Not yet present, called for by later phases: `api/routes/websites.ts` + `website.schema.ts` (Phase 8), `api/routes/jobs.ts` + `workers/` (Phases 9/11/12), `.env`/`README.md`.
+Not yet present, called for by later phases: `api/routes/jobs.ts` + `workers/` (Phases 9/11/12), `.env`/`README.md`.
 
 ---
 
@@ -1797,11 +1818,11 @@ Follow this exact order.
 ## Milestone 9
 
 ```text
-[ ] Website configurations
-[ ] GET /websites
-[ ] POST /websites
-[ ] PUT /websites/:id
-[ ] DELETE /websites/:id
+[x] Website configurations
+[x] GET /websites
+[x] POST /websites
+[x] PUT /websites/:id
+[x] DELETE /websites/:id
 ```
 
 ---
@@ -2027,10 +2048,9 @@ POST /scrape → validate → fetch → parse → extract page title
 
 — is exactly what exists today, plus pagination, dynamic (Playwright) sites, standard error codes, and a security-hardening pass (SSRF/private-network blocking, timeouts, redirect limits, browser reuse) that came out of an audit rather than a planned phase.
 
-Genuinely next, in order, per the phase list in Section 4:
+Genuinely next, in order, per the phase list in Section 4 (Phase 8 is now also done — see its section above):
 
 ```text
-Phase 8  → Website configuration manager (GET/POST/PUT/DELETE /websites)
 Phase 9  → Database (move configs off the filesystem)
 Phase 10 → Caching
 Phase 11 → Scraping jobs (async, for slow browser-mode scrapes)

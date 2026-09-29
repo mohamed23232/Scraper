@@ -8,6 +8,7 @@ import { ConfigLoader } from "../../src/core/config/ConfigLoader.js";
 import { PaginationEngine } from "../../src/core/pagination/PaginationEngine.js";
 import { registerErrorHandler } from "../../src/core/errors/errorHandler.js";
 import { scrapeRoute } from "../../src/api/routes/scrape.js";
+import { websitesRoute } from "../../src/api/routes/websites.js";
 
 export interface TestApp {
     app: FastifyInstance;
@@ -29,6 +30,7 @@ export async function buildTestApp(configsDir?: string): Promise<TestApp> {
 
     await app.register(async (instance) => {
         await scrapeRoute(instance, scraperEngine, extractionEngine, configLoader, paginationEngine);
+        await websitesRoute(instance, configLoader);
     });
 
     await app.ready();

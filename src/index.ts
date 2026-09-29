@@ -9,6 +9,7 @@ import { ConfigLoader } from "./core/config/ConfigLoader.js";
 import { PaginationEngine } from "./core/pagination/PaginationEngine.js";
 import { registerErrorHandler } from "./core/errors/errorHandler.js";
 import { scrapeRoute } from "./api/routes/scrape.js";
+import { websitesRoute } from "./api/routes/websites.js";
 
 const app = Fastify({
     logger: true
@@ -28,6 +29,7 @@ const paginationEngine = new PaginationEngine(scraperEngine, extractionEngine);
 // Routes
 app.register(async (app) => {
     await scrapeRoute(app, scraperEngine, extractionEngine, configLoader, paginationEngine);
+    await websitesRoute(app, configLoader);
 });
 
 app.addHook("onClose", async () => {

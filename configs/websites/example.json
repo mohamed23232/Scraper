@@ -1,6 +1,8 @@
 {
     "id": "example",
 
+    "name": "Example Domain",
+
     "schemaVersion": 1,
 
     "startUrl": "https://example.com",

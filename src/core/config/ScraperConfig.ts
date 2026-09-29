@@ -58,6 +58,8 @@ export const paginationConfigSchema = z.object({
 const rawScraperConfigSchema = z.object({
     id: z.string().min(1),
 
+    name: z.string().min(1).optional(),
+
     schemaVersion: z.literal(1).optional(),
 
     startUrl: z.url().optional(),

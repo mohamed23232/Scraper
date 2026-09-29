@@ -2,6 +2,8 @@ export type ScraperErrorCode =
     | "INVALID_URL"
     | "URL_NOT_ALLOWED"
     | "INVALID_CONFIGURATION"
+    | "CONFIG_NOT_FOUND"
+    | "CONFLICT"
     | "REQUEST_FAILED"
     | "TIMEOUT"
     | "PAGE_NOT_FOUND"
