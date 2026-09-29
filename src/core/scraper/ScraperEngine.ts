@@ -7,6 +7,7 @@ export interface ScraperOptions {
     type?: "static" | "browser" | undefined;
     waitFor?: string | undefined;
     timeout?: number | undefined;
+    blockResources?: boolean | undefined;
 }
 
 export interface ScrapedPage {
@@ -31,7 +32,8 @@ export class ScraperEngine {
 
         const page = await strategy.scrape(url, {
             waitFor: options?.waitFor,
-            timeout: options?.timeout
+            timeout: options?.timeout,
+            blockResources: options?.blockResources
         });
 
         let $: CheerioAPI;

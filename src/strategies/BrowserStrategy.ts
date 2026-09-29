@@ -6,6 +6,16 @@ import { ScraperError } from "../core/errors/ScraperError.js";
 
 const DEFAULT_TIMEOUT = 10000;
 const DEFAULT_CONCURRENCY = 2;
+const DEFAULT_MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
+const BLOCKED_RESOURCE_TYPES = new Set(["image", "font", "media"]);
+
+function getMaxResponseBytes(): number {
+
+    const raw = process.env["MAX_RESPONSE_BYTES"];
+    const parsed = raw ? Number(raw) : NaN;
+
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_RESPONSE_BYTES;
+}
 
 export class BrowserStrategy implements ScrapingStrategy {
 
@@ -18,6 +28,7 @@ export class BrowserStrategy implements ScrapingStrategy {
     async scrape(url: string, options?: ScrapeOptions): Promise<FetchedPage> {
 
         const timeout = options?.timeout ?? DEFAULT_TIMEOUT;
+        const blockResources = options?.blockResources ?? true;
 
         await assertUrlAllowed(url);
         await this.acquireSlot();
@@ -30,18 +41,28 @@ export class BrowserStrategy implements ScrapingStrategy {
 
             let policyViolation: ScraperError | undefined;
 
+            // Every request the page makes — navigation, images, scripts,
+            // fetch()/XHR, iframes — is checked against the URL policy, not
+            // just the top-level navigation. Image/font/media requests are
+            // also dropped by default (blockResources) since they're never
+            // needed for scraping and only cost bandwidth/time.
             await page.route("**/*", async (route) => {
 
                 const request = route.request();
 
-                if (request.isNavigationRequest()) {
-                    try {
-                        await assertUrlAllowed(request.url());
-                    } catch (error) {
+                try {
+                    await assertUrlAllowed(request.url());
+                } catch (error) {
+                    if (request.isNavigationRequest()) {
                         policyViolation = error instanceof ScraperError ? error : undefined;
-                        await route.abort();
-                        return;
                     }
+                    await route.abort();
+                    return;
+                }
+
+                if (blockResources && BLOCKED_RESOURCE_TYPES.has(request.resourceType())) {
+                    await route.abort();
+                    return;
                 }
 
                 await route.continue();
@@ -66,6 +87,15 @@ export class BrowserStrategy implements ScrapingStrategy {
             }
 
             const body = await page.content();
+            const maxBytes = getMaxResponseBytes();
+            const bodyBytes = Buffer.byteLength(body, "utf-8");
+
+            if (bodyBytes > maxBytes) {
+                throw new ScraperError(
+                    "RESPONSE_TOO_LARGE",
+                    `Rendered page exceeded ${maxBytes} bytes (${bodyBytes} bytes, ${url})`
+                );
+            }
 
             return {
                 body,

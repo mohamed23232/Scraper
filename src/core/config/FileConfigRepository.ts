@@ -1,24 +1,20 @@
-import { readFile, writeFile, unlink, readdir, mkdir } from "node:fs/promises";
+import { readFile, writeFile, unlink, rename, readdir, mkdir } from "node:fs/promises";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 
 import { scraperConfigSchema, type ScraperConfig } from "./ScraperConfig.js";
+import type { ConfigRepository, ConfigSummary } from "./ConfigRepository.js";
 import { ScraperError } from "../errors/ScraperError.js";
 
 const DEFAULT_CONFIGS_DIR = path.resolve(process.cwd(), "configs", "websites");
 
 const VALID_ID = /^[a-zA-Z0-9_-]+$/;
 
-export interface WebsiteSummary {
-    id: string;
-    name: string;
-    startUrl: string;
-}
-
-export class ConfigLoader {
+export class FileConfigRepository implements ConfigRepository {
 
     constructor(private readonly configsDir: string = DEFAULT_CONFIGS_DIR) {}
 
-    async list(): Promise<WebsiteSummary[]> {
+    async list(): Promise<ConfigSummary[]> {
 
         let entries: string[];
 
@@ -28,7 +24,7 @@ export class ConfigLoader {
             return [];
         }
 
-        const summaries: WebsiteSummary[] = [];
+        const summaries: ConfigSummary[] = [];
 
         for (const entry of entries) {
 
@@ -42,7 +38,7 @@ export class ConfigLoader {
                 const config = await this.load(id);
                 summaries.push({ id: config.id, name: config.name ?? config.id, startUrl: config.startUrl });
             } catch (error) {
-                console.warn(`[ConfigLoader] skipping '${entry}' while listing: ${(error as Error).message}`);
+                console.warn(`[FileConfigRepository] skipping '${entry}' while listing: ${(error as Error).message}`);
             }
         }
 
@@ -99,14 +95,23 @@ export class ConfigLoader {
         return result.data;
     }
 
-    async save(id: string, config: ScraperConfig): Promise<ScraperConfig> {
+    async save(config: ScraperConfig): Promise<void> {
 
-        this.assertValidId(id);
+        this.assertValidId(config.id);
 
         await mkdir(this.configsDir, { recursive: true });
-        await writeFile(this.pathFor(id), `${JSON.stringify(config, null, 4)}\n`, "utf-8");
 
-        return config;
+        const finalPath = this.pathFor(config.id);
+        const tempPath = path.join(this.configsDir, `.${config.id}.${randomUUID()}.tmp`);
+
+        await writeFile(tempPath, `${JSON.stringify(config, null, 4)}\n`, "utf-8");
+
+        try {
+            await rename(tempPath, finalPath);
+        } catch (error) {
+            await unlink(tempPath).catch(() => {});
+            throw error;
+        }
     }
 
     async remove(id: string): Promise<void> {
@@ -121,7 +126,15 @@ export class ConfigLoader {
     }
 
     private pathFor(id: string): string {
-        return path.join(this.configsDir, `${id}.json`);
+
+        const resolvedDir = path.resolve(this.configsDir) + path.sep;
+        const resolvedPath = path.resolve(this.configsDir, `${id}.json`);
+
+        if (!resolvedPath.startsWith(resolvedDir)) {
+            throw new ScraperError("INVALID_CONFIGURATION", `Invalid configuration id: ${id}`);
+        }
+
+        return resolvedPath;
     }
 
     private assertValidId(id: string): void {

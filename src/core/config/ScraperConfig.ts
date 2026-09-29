@@ -42,7 +42,8 @@ export const fieldConfigSchema = z.object({
 export const scraperOptionsSchema = z.object({
     type: z.enum(["static", "browser"]),
     waitFor: z.string().min(1).optional(),
-    timeout: z.number().int().positive().optional()
+    timeout: z.number().int().positive().optional(),
+    blockResources: z.boolean().optional()
 });
 
 export const paginationConfigSchema = z.object({
@@ -55,8 +56,13 @@ export const paginationConfigSchema = z.object({
     failOnPageError: z.boolean().optional()
 });
 
+export const configIdSchema = z.string()
+    .min(1)
+    .max(100)
+    .regex(/^[a-zA-Z0-9_-]+$/, "id must contain only letters, digits, '-' and '_'");
+
 const rawScraperConfigSchema = z.object({
-    id: z.string().min(1),
+    id: configIdSchema,
 
     name: z.string().min(1).optional(),
 

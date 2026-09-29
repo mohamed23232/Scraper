@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { scrapeRequestSchema } from "../schemas/scrape.schema.js";
 import { ScraperEngine } from "../../core/scraper/ScraperEngine.js";
 import { ExtractionEngine } from "../../extractors/ExtractionEngine.js";
-import { ConfigLoader } from "../../core/config/ConfigLoader.js";
+import type { ConfigRepository } from "../../core/config/ConfigRepository.js";
 import { PaginationEngine, type PaginationResult } from "../../core/pagination/PaginationEngine.js";
 import { TransformPipeline } from "../../transforms/TransformPipeline.js";
 import { ScraperError } from "../../core/errors/ScraperError.js";
@@ -12,7 +12,7 @@ export async function scrapeRoute(
     app: FastifyInstance,
     scraperEngine: ScraperEngine,
     extractionEngine: ExtractionEngine,
-    configLoader: ConfigLoader,
+    configLoader: ConfigRepository,
     paginationEngine: PaginationEngine
 ) {
     app.post("/scrape", async (request, reply) => {

@@ -60,7 +60,18 @@ export interface UrlPolicyOptions {
     allowPrivateNetworks?: boolean;
 }
 
-export async function assertUrlAllowed(rawUrl: string, options: UrlPolicyOptions = {}): Promise<void> {
+export interface UrlPolicyResult {
+    /**
+     * The IP address that was validated for this hostname, when the URL's
+     * host was a name rather than a literal IP. Callers that connect
+     * separately (a second DNS lookup at connect time) should pin their
+     * connection to this address to avoid a DNS-rebinding gap between the
+     * check and the actual request.
+     */
+    resolvedIp?: string;
+}
+
+export async function assertUrlAllowed(rawUrl: string, options: UrlPolicyOptions = {}): Promise<UrlPolicyResult> {
 
     let url: URL;
 
@@ -80,7 +91,7 @@ export async function assertUrlAllowed(rawUrl: string, options: UrlPolicyOptions
     const allowPrivate = options.allowPrivateNetworks ?? allowPrivateNetworksFromEnv();
 
     if (allowPrivate) {
-        return;
+        return {};
     }
 
     const hostname = url.hostname;
@@ -92,7 +103,7 @@ export async function assertUrlAllowed(rawUrl: string, options: UrlPolicyOptions
                 `URL resolves to a disallowed private/internal address: ${hostname}`
             );
         }
-        return;
+        return {};
     }
 
     let addresses: string[];
@@ -116,4 +127,6 @@ export async function assertUrlAllowed(rawUrl: string, options: UrlPolicyOptions
             );
         }
     }
+
+    return { resolvedIp: addresses[0]! };
 }

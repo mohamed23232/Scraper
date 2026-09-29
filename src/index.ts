@@ -5,9 +5,10 @@ import { ScraperEngine } from "./core/scraper/ScraperEngine.js";
 import { StaticStrategy } from "./strategies/StaticStrategy.js";
 import { BrowserStrategy } from "./strategies/BrowserStrategy.js";
 import { ExtractionEngine } from "./extractors/ExtractionEngine.js";
-import { ConfigLoader } from "./core/config/ConfigLoader.js";
+import { FileConfigRepository } from "./core/config/FileConfigRepository.js";
 import { PaginationEngine } from "./core/pagination/PaginationEngine.js";
 import { registerErrorHandler } from "./core/errors/errorHandler.js";
+import { adminAuthWarningIfAny } from "./core/auth/adminAuth.js";
 import { scrapeRoute } from "./api/routes/scrape.js";
 import { websitesRoute } from "./api/routes/websites.js";
 
@@ -17,13 +18,19 @@ const app = Fastify({
 
 registerErrorHandler(app);
 
+const authWarning = adminAuthWarningIfAny();
+
+if (authWarning) {
+    app.log.warn(authWarning);
+}
+
 // Dependencies
 const httpClient = new HttpClient();
 const staticStrategy = new StaticStrategy(httpClient);
 const browserStrategy = new BrowserStrategy();
 const scraperEngine = new ScraperEngine(staticStrategy, browserStrategy);
 const extractionEngine = new ExtractionEngine();
-const configLoader = new ConfigLoader();
+const configLoader = new FileConfigRepository(process.env["CONFIGS_DIR"]);
 const paginationEngine = new PaginationEngine(scraperEngine, extractionEngine);
 
 // Routes

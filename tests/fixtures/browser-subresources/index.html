@@ -1,0 +1,14 @@
+<html>
+<body>
+    <div class="product"><span class="name">Item</span></div>
+
+    <img src="/tracking.gif" />
+
+    <img src="file:///this-should-be-blocked" onerror="fetch('/marker?type=img-blocked-error')" />
+
+    <script>
+        fetch('file:///this-should-be-blocked')
+            .catch(function () { fetch('/marker?type=fetch-blocked-error'); });
+    </script>
+</body>
+</html>

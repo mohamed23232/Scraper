@@ -85,32 +85,13 @@ The final system should look approximately like this:
 
 # 3. Current Project State
 
-You have already completed:
-
-- Node.js installation
-- npm project initialization
-- TypeScript installation
-- `tsconfig.json`
-- Fastify installation
-- Cheerio installation
-- Playwright installation
-- Zod installation
-- Playwright Chromium installation
-- Project structure
-- `package.json` scripts
-- Basic Fastify server
-
-Your current server successfully runs with:
+**This section described the pre-Phase-1 setup checklist (Node/TypeScript/Fastify installed, server not yet built). That's long done — see §30 for what's actually built and what's next, and README.md for how to run it.**
 
 ```bash
 npm run dev
 ```
 
-and responds from:
-
-```text
-http://localhost:3000
-```
+responds from `http://localhost:3000`.
 
 ---
 
@@ -1115,7 +1096,12 @@ Implemented exactly as planned, with one deliberate deviation:
 INVALID_URL
 INVALID_CONFIGURATION
 URL_NOT_ALLOWED          (added — the SSRF/private-network policy needed its own code)
+CONFIG_NOT_FOUND         (added in Phase 8 — GET/PUT/DELETE /websites/:id on an unknown id)
+CONFLICT                 (added in Phase 8 — POST /websites with a duplicate id)
+UNAUTHORIZED             (added in a later audit — missing/wrong admin API key)
+FORBIDDEN                (added in a later audit — writes disabled in production with no key set)
 REQUEST_FAILED
+RESPONSE_TOO_LARGE       (added in a later audit — response exceeded MAX_RESPONSE_BYTES)
 TIMEOUT
 PAGE_NOT_FOUND
 SELECTOR_NOT_FOUND
@@ -1130,9 +1116,12 @@ Status → HTTP mapping (`errorHandler.ts`):
 
 ```text
 400  INVALID_URL, INVALID_CONFIGURATION
-403  URL_NOT_ALLOWED
+401  UNAUTHORIZED
+403  URL_NOT_ALLOWED, FORBIDDEN
+404  CONFIG_NOT_FOUND
+409  CONFLICT
 422  SELECTOR_NOT_FOUND, TRANSFORMATION_ERROR
-502  REQUEST_FAILED, PAGE_NOT_FOUND, BROWSER_ERROR, PARSING_ERROR
+502  REQUEST_FAILED, PAGE_NOT_FOUND, BROWSER_ERROR, PARSING_ERROR, RESPONSE_TOO_LARGE
 504  TIMEOUT
 ```
 
@@ -1206,7 +1195,9 @@ A design review after Phase 6 added a batch of config options across `field`, `i
 
 ## Scraper options (inside `scraper`)
 
-Unchanged from Phase 5 (`type`, `waitFor`, `timeout`) — `timeout` is now actually honored in static mode too (it was silently ignored before this audit).
+`type`, `waitFor`, `timeout` unchanged from Phase 5 — `timeout` is now actually honored in static mode too (it was silently ignored before this audit).
+
+- **`blockResources`** (default `true`, browser mode only) — drops image/font/media requests before they're sent, since a scraper never needs them and they only cost bandwidth and time. Set `false` if a page's own JavaScript depends on an image actually loading (rare, but possible — e.g. a script that reads an image's dimensions).
 
 ## Pagination options (inside `pagination`)
 
@@ -1249,6 +1240,22 @@ Unchanged from Phase 5 (`type`, `waitFor`, `timeout`) — `timeout` is now actua
 - A request body must unambiguously match exactly one of the three shapes (flat / inline `config` / `website`) — extra or conflicting fields (e.g. sending both `config` and `website`) are now a `400`, where they used to be silently accepted and partially ignored.
 - **`ALLOW_INLINE_CONFIGS`** (env var; default: `true` unless `NODE_ENV=production`) — when `false`, flat and inline-`config` requests are rejected; only `website`-id requests (against saved, reviewed configs) are served. Meant for a production deployment that only wants to expose pre-approved scrapes.
 - **`ALLOW_PRIVATE_NETWORKS`** (env var; default `false`) — must stay `false`/unset anywhere this API is actually reachable; see §29.
+
+## Phase 8 hardening (a second audit, after `/websites` shipped)
+
+A follow-up review specifically of Phase 8's write endpoints found they had **no authentication at all** — anyone who could reach the server could `POST /websites` an arbitrary config (any `startUrl`, any selectors) and immediately scrape it, which defeated the entire point of `ALLOW_INLINE_CONFIGS=false`. That, plus a few related correctness/security gaps, were fixed together:
+
+- **`ADMIN_API_KEY`** (env var) — `POST`/`PUT`/`DELETE /websites` now require `Authorization: Bearer <key>`, compared with `crypto.timingSafeEqual` (not a plain `===`, which leaks timing information about how many leading characters matched). `GET` routes and `/scrape` stay unauthenticated. Three states:
+  - **key set** → correct key required, wrong/missing key → `401 UNAUTHORIZED`.
+  - **key unset, `NODE_ENV=production`** → writes disabled entirely, `403 FORBIDDEN`, so a production deploy can never accidentally run with open write access.
+  - **key unset, not production** → writes allowed unauthenticated (developer convenience), with a one-time warning logged at startup.
+- The config `id` regex (`[A-Za-z0-9_-]+`, blocking path traversal like `../x`) was already enforced deep inside the file-writing code — it now also lives on `scraperConfigSchema.id` itself (with a 100-char max), so a bad id is a clean field-level `400` instead of a generic error surfacing later. `FileConfigRepository` also re-checks the resolved file path is still inside the configs directory, as a second, independent layer.
+- **`MAX_RESPONSE_BYTES`** (env var, default 5MB) — a scraped page's response is now capped; static mode aborts a streaming download early if it exceeds this (checking `Content-Length` first, then counting bytes as they arrive), browser mode checks the rendered page's size the same way. Exceeding it is `RESPONSE_TOO_LARGE` (502).
+- Browser mode's subresource requests (images, scripts, `fetch()`/XHR, iframes) are now checked against the URL policy too — previously only the top-level page navigation was checked, meaning a page's own JavaScript could still reach a blocked address via `fetch()` even though navigating there directly was blocked.
+- A field with `required: false` (so its value can genuinely be `null`) and a `transform: [{"name": "default", ...}]` now actually works — `default` is specifically designed to turn `null` into a fallback, but it was previously never given the chance to run at all, since the whole transform pipeline was skipped outright whenever the input was `null`. Every other transform still passes `null` straight through unchanged (not their job to handle a missing value) — `default` is the one exception.
+- **`CONFIGS_DIR`** (env var, default `configs/websites`) — where website config files live. `FileConfigRepository.save()` also writes atomically now (temp file + rename) so `/scrape` can never read a half-written file mid-save.
+- **Known limitation, not fixed**: DNS-rebinding in *browser* mode. Static mode now resolves a hostname once, validates that IP, and pins the actual connection to it (via a custom undici dispatcher) so a second, different DNS answer at connect time can't smuggle a private address past the check. Browser mode has no equivalent — Playwright/Chromium does its own internal DNS resolution that isn't interceptable the same way. Not exploited today (URLs are still checked before every navigation and every subresource request), but a sufficiently well-timed DNS response change between the check and Chromium's own connection remains a theoretical gap in browser mode specifically.
+- `ConfigLoader` was extracted into a `ConfigRepository` interface, implemented by `FileConfigRepository` — `scrape.ts`/`websites.ts` depend only on the interface. This is groundwork for Phase 9: a future `DatabaseConfigRepository` can implement the same interface, and the CRUD contract tests (`tests/helpers/configRepository.contract.ts`) already run against any implementation via a factory function, so Phase 9 only needs to add one new test file, not rewrite the test suite.
 
 ---
 
@@ -1626,7 +1633,7 @@ This allows you to create configurations visually instead of manually editing JS
 
 # 25. Project Structure
 
-**Status: below is the actual current tree**, not an aspirational target — kept up to date as phases land. `api/routes/jobs.ts` and `workers/` from the original plan don't exist yet (Phases 9/11, 12 respectively); `strategies/ApiStrategy.ts` (a JSON/API-only scraper strategy) was never called for by any phase actually implemented and was dropped from the plan.
+**Status: below is the actual current tree**, not an aspirational target — kept up to date as phases land. `api/routes/jobs.ts` (Phase 11 — scraping jobs) and `workers/` (Phase 12 — queue system) from the original plan don't exist yet; `strategies/ApiStrategy.ts` (a JSON/API-only scraper strategy) was never called for by any phase actually implemented and was dropped from the plan.
 
 ```text
 scraper-system/
@@ -1648,27 +1655,31 @@ scraper-system/
 │   │   │
 │   │   ├── config/
 │   │   │   ├── ScraperConfig.ts        (Zod schemas — field/scraper/pagination/site config)
-│   │   │   ├── ConfigLoader.ts         (load/list/exists/save/remove configs/websites/<id>.json)
+│   │   │   ├── ConfigRepository.ts     (interface: load/list/exists/save/remove)
+│   │   │   ├── FileConfigRepository.ts (implementation — CONFIGS_DIR/<id>.json, atomic writes)
 │   │   │   └── featureFlags.ts         (ALLOW_INLINE_CONFIGS)
+│   │   │
+│   │   ├── auth/
+│   │   │   └── adminAuth.ts            (ADMIN_API_KEY preHandler for write routes)
 │   │   │
 │   │   ├── errors/
 │   │   │   ├── ScraperError.ts         (typed error + error codes)
 │   │   │   └── errorHandler.ts         (Fastify setErrorHandler — code → HTTP status)
 │   │   │
 │   │   ├── http/
-│   │   │   ├── HttpClient.ts           (manual redirect-following, timeout, FetchedPage)
+│   │   │   ├── HttpClient.ts           (redirects, timeout, response-size limit, DNS pinning, FetchedPage)
 │   │   │   └── FetchedPage.ts
 │   │   │
 │   │   ├── pagination/
 │   │   │   └── PaginationEngine.ts     (multi-page loop, safeguards, stopReason)
 │   │   │
 │   │   └── security/
-│   │       └── UrlPolicy.ts            (protocol + private-IP/SSRF allowlist)
+│   │       └── UrlPolicy.ts            (protocol + private-IP/SSRF allowlist; returns resolved IP)
 │   │
 │   ├── strategies/
 │   │   ├── ScrapingStrategy.ts
 │   │   ├── StaticStrategy.ts
-│   │   └── BrowserStrategy.ts          (shared/reused Chromium instance + concurrency limit)
+│   │   └── BrowserStrategy.ts          (shared/reused Chromium; concurrency limit; blockResources; per-request policy check)
 │   │
 │   ├── extractors/
 │   │   ├── Extractor.ts
@@ -1699,18 +1710,21 @@ scraper-system/
 ├── tests/
 │   ├── helpers/
 │   │   ├── testServer.ts               (local fixture HTTP server for tests)
-│   │   └── buildApp.ts                 (in-process Fastify app for route tests)
+│   │   ├── buildApp.ts                 (in-process Fastify app for route tests)
+│   │   └── configRepository.contract.ts (shared CRUD contract; run against any ConfigRepository)
 │   ├── fixtures/                       (saved HTML — no test depends on a live site)
 │   ├── setup.ts
-│   └── *.test.ts                       (65 tests across 8 files)
+│   └── *.test.ts                       (86 tests across 10 files)
 │
 ├── package.json
 ├── tsconfig.json
 ├── vitest.config.ts
+├── .env.example
+├── README.md
 └── .gitignore
 ```
 
-Not yet present, called for by later phases: `api/routes/jobs.ts` + `workers/` (Phases 9/11/12), `.env`/`README.md`.
+Not yet present, called for by later phases: `api/routes/jobs.ts` (Phase 11), `workers/` (Phase 12).
 
 ---
 
@@ -1862,7 +1876,7 @@ Follow this exact order.
 
 # 27. First Real Target
 
-**Achieved.** This works today exactly as originally envisioned — with two small corrections learned along the way: `example.com` no longer has an `<h1>` (its markup changed since this doc was written — see Phase 5's notes), and the item selector needed to be `html` rather than `body` so a field can reach `<title>` in `<head>`.
+**Achieved.** This works today exactly as originally envisioned — with two small corrections learned along the way: `example.com` no longer has an `<h1>` (its markup changed since this doc was written — discovered while regression-testing Phase 5), and the item selector needed to be `html` rather than `body` so a field can reach `<title>` in `<head>`.
 
 ### Request
 
@@ -2015,20 +2029,22 @@ At minimum consider:
 
 ```text
 [x] URL validation           — protocol allowlist (http/https only), Zod-validated
-[x] SSRF / private-network blocking — see below
+[x] SSRF / private-network blocking — see below; static mode also pins the connection to the checked IP (DNS-rebinding defense)
 [x] request timeouts         — per-request + overall pagination budget
 [x] redirect limits          — max 5 hops, each hop re-validated
 [x] concurrency limits       — browser strategy caps concurrent Chromium pages (default 2)
-[ ] response-size limits     — not yet implemented
+[x] response-size limits     — MAX_RESPONSE_BYTES (default 5MB), static mode streams+aborts, browser mode checks page.content() size
 [ ] rate limiting            — not yet implemented
-[ ] resource limits          — not yet implemented (beyond browser concurrency)
+[ ] resource limits          — not yet implemented (beyond browser concurrency + response-size limit)
 [x] logging                  — Fastify's logger + ScraperError codes
-[ ] authentication           — not yet implemented (fine while this only runs locally)
+[x] authentication           — ADMIN_API_KEY gates POST/PUT/DELETE /websites (GET and /scrape stay open); see §22a
 ```
 
 Be especially careful about server-side request forgery (SSRF). A public scraper API should not be able to freely request internal network addresses or cloud metadata endpoints.
 
-**This was a real, demonstrated vulnerability, not a hypothetical** — an audit found that browser mode (`scraper.type: "browser"`) could navigate to `file:///` URLs and return local file contents as "scraped data," and nothing blocked requests to `127.0.0.1`, `10.0.0.0/8`, `169.254.169.254` (cloud metadata), etc. Fixed in `src/core/security/UrlPolicy.ts`: only `http`/`https` are allowed, and every hostname is DNS-resolved and checked against the private/loopback/link-local ranges before every fetch — the initial URL, every redirect hop, and every pagination "next" page. An `ALLOW_PRIVATE_NETWORKS=true` env var exists solely so the test suite can hit its own local fixture server; it must stay unset (or `false`) anywhere this API is actually reachable.
+**This was a real, demonstrated vulnerability, not a hypothetical** — an audit found that browser mode (`scraper.type: "browser"`) could navigate to `file:///` URLs and return local file contents as "scraped data," and nothing blocked requests to `127.0.0.1`, `10.0.0.0/8`, `169.254.169.254` (cloud metadata), etc. Fixed in `src/core/security/UrlPolicy.ts`: only `http`/`https` are allowed, and every hostname is DNS-resolved and checked against the private/loopback/link-local ranges before every fetch — the initial URL, every redirect hop, and every pagination "next" page. Extended in a later audit to cover every subresource request in browser mode too (images, scripts, `fetch()`/XHR), not just the top-level navigation. An `ALLOW_PRIVATE_NETWORKS=true` env var exists solely so the test suite can hit its own local fixture server; it must stay unset (or `false`) anywhere this API is actually reachable.
+
+**Known limitation**: DNS rebinding in browser mode. Static mode pins its connection to the specific IP address that was already validated (see §22a), so a second DNS answer at connect time can't smuggle a private address past the check. Browser mode has no equivalent — Chromium's own internal DNS resolution isn't interceptable the same way — so a narrow, well-timed DNS-rebinding window remains there specifically. Every request is still checked before being sent; this is about the gap between that check and Chromium's own separate connection.
 
 Also respect the target site's terms, robots policies where applicable, copyright, and access controls.
 
@@ -2036,7 +2052,7 @@ Also respect the target site's terms, robots policies where applicable, copyrigh
 
 # 30. Current Status and What's Actually Next
 
-Phases 1–7 are complete and tested (see each phase's own "Status" line above, and `tests/`). That original three-step arc this section used to describe —
+Phases 1–8 are complete and tested (see each phase's own "Status" line above, and `tests/`). That original three-step arc this section used to describe —
 
 ```text
 POST /scrape → validate → fetch → parse → extract page title
@@ -2059,4 +2075,4 @@ Phase 13 → Unity client
 Phase 14 → Admin UI
 ```
 
-Also still open, noted but deliberately deferred during the audit (see each phase's notes above for why): nested objects/sub-items in extraction, `pagination.mode: "click"` / `"urlPattern"` for pagination that isn't link-based, response-size limits, and rate limiting.
+Also still open, noted but deliberately deferred during the audits (see each phase's notes above for why): nested objects/sub-items in extraction, `pagination.mode: "click"` / `"urlPattern"` for pagination that isn't link-based, rate limiting, and DNS-rebinding protection in browser mode specifically (§29).

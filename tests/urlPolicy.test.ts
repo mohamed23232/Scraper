@@ -31,16 +31,15 @@ describe("A1: URL policy / SSRF protection", () => {
         ).rejects.toThrow(ScraperError);
     });
 
-    test("allows a normal public https URL", async () => {
-        await expect(
-            assertUrlAllowed("https://example.com/", { allowPrivateNetworks: false })
-        ).resolves.toBeUndefined();
+    test("allows a normal public https URL, and returns the resolved IP for connection pinning (A5)", async () => {
+        const result = await assertUrlAllowed("https://example.com/", { allowPrivateNetworks: false });
+        expect(typeof result.resolvedIp).toBe("string");
     });
 
     test("allowPrivateNetworks: true permits a private address (explicit opt-in)", async () => {
         await expect(
             assertUrlAllowed("http://127.0.0.1:8080/", { allowPrivateNetworks: true })
-        ).resolves.toBeUndefined();
+        ).resolves.toEqual({});
     });
 
     test("throws with the URL_NOT_ALLOWED code for a blocked protocol", async () => {

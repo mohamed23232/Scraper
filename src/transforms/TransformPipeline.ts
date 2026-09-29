@@ -65,7 +65,16 @@ export class TransformPipeline {
         }
 
         return specs.reduce<unknown>(
-            (acc, spec) => resolveTransform(spec).apply(acc, context),
+            (acc, spec) => {
+
+                const isDefaultTransform = typeof spec !== "string" && spec.name === "default";
+
+                if ((acc === null || acc === undefined) && !isDefaultTransform) {
+                    return acc;
+                }
+
+                return resolveTransform(spec).apply(acc, context);
+            },
             value
         );
     }

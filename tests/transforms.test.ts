@@ -48,6 +48,58 @@ describe("A7: parseNumber failure handling", () => {
     });
 });
 
+describe("A6: null values and the default transform", () => {
+
+    test("regression: a 'default' transform DOES fire on a genuinely null value (was previously skipped entirely)", () => {
+        const items = [{ rating: null }];
+
+        const result = applyFieldTransforms(
+            items,
+            { rating: { transform: [{ name: "default", value: "N/A" }] } },
+            "https://example.com"
+        );
+
+        expect(result).toEqual([{ rating: "N/A" }]);
+    });
+
+    test("non-default transforms still pass null through unchanged, even mid-pipeline", () => {
+        const items = [{ rating: null }];
+
+        const result = applyFieldTransforms(
+            items,
+            { rating: { transform: ["trim", "parseNumber"] } },
+            "https://example.com"
+        );
+
+        expect(result).toEqual([{ rating: null }]);
+    });
+
+    test("a pipeline can trim first, then substitute a default only if still empty", () => {
+        const items = [{ a: "   ", b: null }];
+
+        const result = applyFieldTransforms(
+            items,
+            {
+                a: { transform: ["trim", { name: "default", value: "empty" }] },
+                b: { transform: ["trim", { name: "default", value: "empty" }] }
+            },
+            "https://example.com"
+        );
+
+        // "   " trims to "" (not null), so DefaultTransform's own empty-string
+        // check catches it too; b starts null and skips straight to default.
+        expect(result).toEqual([{ a: "empty", b: "empty" }]);
+    });
+
+    test("type validation already allowed null for a non-required field (no regression)", () => {
+        const items = [{ rating: null }];
+
+        const result = applyFieldTransforms(items, { rating: { type: "string" } }, "https://example.com");
+
+        expect(result).toEqual([{ rating: null }]);
+    });
+});
+
 describe("B3: parameterized transforms", () => {
 
     test("parseNumber still works as a bare string name (backward compatible)", () => {

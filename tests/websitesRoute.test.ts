@@ -1,7 +1,7 @@
-import { describe, test, expect, beforeEach, afterEach } from "vitest";
+import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { buildTestApp, type TestApp } from "./helpers/buildApp.js";
 import { startFixtureServer, type TestServer } from "./helpers/testServer.js";
@@ -184,5 +184,155 @@ describe("Phase 8: /websites CRUD API", () => {
         } finally {
             await server.close();
         }
+    });
+
+    test("B3: a deliberately invalid file on disk is skipped by list(), with a warning logged", async () => {
+
+        await testApp.app.inject({ method: "POST", url: "/websites", payload: validConfig });
+        await writeFile(path.join(configsDir, "broken.json"), "{ not valid json", "utf-8");
+
+        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        try {
+            const response = await testApp.app.inject({ method: "GET", url: "/websites" });
+
+            expect(response.statusCode).toBe(200);
+            expect(response.json().data).toEqual([
+                { id: "mysite", name: "My Site", startUrl: "https://example.com" }
+            ]);
+            expect(warnSpy).toHaveBeenCalledTimes(1);
+            expect(warnSpy.mock.calls[0]?.[0]).toContain("broken.json");
+        } finally {
+            warnSpy.mockRestore();
+        }
+    });
+});
+
+describe("Phase 8 / A1: admin authentication on write routes", () => {
+
+    let configsDir: string;
+    let testApp: TestApp;
+
+    const validConfig = {
+        id: "mysite",
+        startUrl: "https://example.com",
+        scraper: { type: "static" },
+        item: { selector: ".product" },
+        fields: { name: { selector: ".name", extract: "text" } }
+    };
+
+    beforeEach(async () => {
+        configsDir = await mkdtemp(path.join(tmpdir(), "scraper-websites-auth-"));
+        testApp = await buildTestApp(configsDir);
+    });
+
+    afterEach(async () => {
+        await testApp.app.close();
+        await testApp.browserStrategy.close();
+        await rm(configsDir, { recursive: true, force: true });
+        delete process.env["ADMIN_API_KEY"];
+        delete process.env["NODE_ENV"];
+    });
+
+    test("with no ADMIN_API_KEY set (dev default): writes are allowed, unauthenticated", async () => {
+
+        delete process.env["ADMIN_API_KEY"];
+        delete process.env["NODE_ENV"];
+
+        const response = await testApp.app.inject({ method: "POST", url: "/websites", payload: validConfig });
+
+        expect(response.statusCode).toBe(201);
+    });
+
+    test("with no ADMIN_API_KEY set and NODE_ENV=production: writes are disabled (403 FORBIDDEN)", async () => {
+
+        delete process.env["ADMIN_API_KEY"];
+        process.env["NODE_ENV"] = "production";
+
+        const response = await testApp.app.inject({ method: "POST", url: "/websites", payload: validConfig });
+
+        expect(response.statusCode).toBe(403);
+        expect(response.json().error.code).toBe("FORBIDDEN");
+    });
+
+    test("with ADMIN_API_KEY set: a request with no Authorization header is rejected (401)", async () => {
+
+        process.env["ADMIN_API_KEY"] = "s3cret";
+
+        const response = await testApp.app.inject({ method: "POST", url: "/websites", payload: validConfig });
+
+        expect(response.statusCode).toBe(401);
+        expect(response.json().error.code).toBe("UNAUTHORIZED");
+    });
+
+    test("with ADMIN_API_KEY set: a request with the wrong key is rejected (401)", async () => {
+
+        process.env["ADMIN_API_KEY"] = "s3cret";
+
+        const response = await testApp.app.inject({
+            method: "POST",
+            url: "/websites",
+            payload: validConfig,
+            headers: { authorization: "Bearer wrong-key" }
+        });
+
+        expect(response.statusCode).toBe(401);
+    });
+
+    test("with ADMIN_API_KEY set: the correct key succeeds", async () => {
+
+        process.env["ADMIN_API_KEY"] = "s3cret";
+
+        const response = await testApp.app.inject({
+            method: "POST",
+            url: "/websites",
+            payload: validConfig,
+            headers: { authorization: "Bearer s3cret" }
+        });
+
+        expect(response.statusCode).toBe(201);
+    });
+
+    test("PUT and DELETE are also gated (not just POST)", async () => {
+
+        process.env["ADMIN_API_KEY"] = "s3cret";
+        const auth = { authorization: "Bearer s3cret" };
+
+        await testApp.app.inject({ method: "POST", url: "/websites", payload: validConfig, headers: auth });
+
+        const putNoAuth = await testApp.app.inject({
+            method: "PUT",
+            url: "/websites/mysite",
+            payload: validConfig
+        });
+        expect(putNoAuth.statusCode).toBe(401);
+
+        const deleteNoAuth = await testApp.app.inject({ method: "DELETE", url: "/websites/mysite" });
+        expect(deleteNoAuth.statusCode).toBe(401);
+
+        const deleteWithAuth = await testApp.app.inject({
+            method: "DELETE",
+            url: "/websites/mysite",
+            headers: auth
+        });
+        expect(deleteWithAuth.statusCode).toBe(204);
+    });
+
+    test("GET routes stay unauthenticated even when ADMIN_API_KEY is set", async () => {
+
+        process.env["ADMIN_API_KEY"] = "s3cret";
+
+        await testApp.app.inject({
+            method: "POST",
+            url: "/websites",
+            payload: validConfig,
+            headers: { authorization: "Bearer s3cret" }
+        });
+
+        const list = await testApp.app.inject({ method: "GET", url: "/websites" });
+        const get = await testApp.app.inject({ method: "GET", url: "/websites/mysite" });
+
+        expect(list.statusCode).toBe(200);
+        expect(get.statusCode).toBe(200);
     });
 });

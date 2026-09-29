@@ -48,7 +48,7 @@ export function applyFieldTransforms(
 
             let value: unknown = rawValue;
 
-            if (fieldConfig.transform && fieldConfig.transform.length > 0 && rawValue !== null && rawValue !== undefined) {
+            if (fieldConfig.transform && fieldConfig.transform.length > 0) {
 
                 try {
                     value = TransformPipeline.runOnExtracted(rawValue, fieldConfig.transform, { baseUrl });

@@ -4,7 +4,9 @@ import { ScraperError, type ScraperErrorCode } from "./ScraperError.js";
 const STATUS_BY_CODE: Record<ScraperErrorCode, number> = {
     INVALID_URL: 400,
     INVALID_CONFIGURATION: 400,
+    UNAUTHORIZED: 401,
     URL_NOT_ALLOWED: 403,
+    FORBIDDEN: 403,
     CONFIG_NOT_FOUND: 404,
     SELECTOR_NOT_FOUND: 422,
     TRANSFORMATION_ERROR: 422,
@@ -13,6 +15,7 @@ const STATUS_BY_CODE: Record<ScraperErrorCode, number> = {
     PAGE_NOT_FOUND: 502,
     BROWSER_ERROR: 502,
     PARSING_ERROR: 502,
+    RESPONSE_TOO_LARGE: 502,
     TIMEOUT: 504
 };
 

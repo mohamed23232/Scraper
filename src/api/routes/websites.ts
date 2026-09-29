@@ -1,9 +1,10 @@
 import type { FastifyInstance } from "fastify";
-import { ConfigLoader } from "../../core/config/ConfigLoader.js";
+import type { ConfigRepository } from "../../core/config/ConfigRepository.js";
 import { websiteIdParamSchema, websiteConfigBodySchema } from "../schemas/website.schema.js";
 import { ScraperError } from "../../core/errors/ScraperError.js";
+import { requireAdminAuth } from "../../core/auth/adminAuth.js";
 
-export async function websitesRoute(app: FastifyInstance, configLoader: ConfigLoader) {
+export async function websitesRoute(app: FastifyInstance, configLoader: ConfigRepository) {
 
     app.get("/websites", async (_request, reply) => {
 
@@ -25,7 +26,7 @@ export async function websitesRoute(app: FastifyInstance, configLoader: ConfigLo
         return reply.status(200).send({ success: true, data: config });
     });
 
-    app.post("/websites", async (request, reply) => {
+    app.post("/websites", { preHandler: requireAdminAuth }, async (request, reply) => {
 
         const result = websiteConfigBodySchema.safeParse(request.body);
 
@@ -39,12 +40,12 @@ export async function websitesRoute(app: FastifyInstance, configLoader: ConfigLo
             throw new ScraperError("CONFLICT", `Website configuration '${config.id}' already exists`);
         }
 
-        const saved = await configLoader.save(config.id, config);
+        await configLoader.save(config);
 
-        return reply.status(201).send({ success: true, data: saved });
+        return reply.status(201).send({ success: true, data: config });
     });
 
-    app.put("/websites/:id", async (request, reply) => {
+    app.put("/websites/:id", { preHandler: requireAdminAuth }, async (request, reply) => {
 
         const params = websiteIdParamSchema.safeParse(request.params);
 
@@ -68,12 +69,12 @@ export async function websitesRoute(app: FastifyInstance, configLoader: ConfigLo
             throw new ScraperError("INVALID_CONFIGURATION", "Invalid website configuration", result.error.issues);
         }
 
-        const saved = await configLoader.save(id, result.data);
+        await configLoader.save(result.data);
 
-        return reply.status(200).send({ success: true, data: saved });
+        return reply.status(200).send({ success: true, data: result.data });
     });
 
-    app.delete("/websites/:id", async (request, reply) => {
+    app.delete("/websites/:id", { preHandler: requireAdminAuth }, async (request, reply) => {
 
         const params = websiteIdParamSchema.safeParse(request.params);
 
