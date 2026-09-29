@@ -27,12 +27,11 @@ export async function scrapeRoute(
 
         try {
 
-            const $ = await scraperEngine.scrape(body.url);
-
             let data: unknown;
 
             if ("config" in body) {
 
+                const $ = await scraperEngine.scrape(body.url, body.scraper);
                 const items = extractionEngine.extractItems($, body.config.item.selector, body.config.fields);
                 data = applyFieldTransforms(items, body.config.fields, body.url);
 
@@ -49,10 +48,13 @@ export async function scrapeRoute(
                     });
                 }
 
+                const $ = await scraperEngine.scrape(body.url, config.scraper);
                 const items = extractionEngine.extractItems($, config.item.selector, config.fields);
                 data = applyFieldTransforms(items, config.fields, body.url);
 
             } else {
+
+                const $ = await scraperEngine.scrape(body.url, body.scraper);
 
                 const values = extractionEngine.extract($, {
                     selector: body.selector,

@@ -14,14 +14,18 @@ export const fieldConfigSchema = z.object({
     }
 );
 
+export const scraperOptionsSchema = z.object({
+    type: z.enum(["static", "browser"]),
+    waitFor: z.string().min(1).optional(),
+    timeout: z.number().int().positive().optional()
+});
+
 export const scraperConfigSchema = z.object({
     id: z.string().min(1),
 
     website: z.url(),
 
-    scraper: z.object({
-        type: z.enum(["static", "browser"])
-    }),
+    scraper: scraperOptionsSchema,
 
     item: z.object({
         selector: z.string().min(1)
@@ -35,4 +39,5 @@ export const scraperConfigSchema = z.object({
 });
 
 export type FieldConfig = z.infer<typeof fieldConfigSchema>;
+export type ScraperOptionsConfig = z.infer<typeof scraperOptionsSchema>;
 export type ScraperConfig = z.infer<typeof scraperConfigSchema>;

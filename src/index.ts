@@ -2,6 +2,8 @@ import Fastify from "fastify";
 
 import { HttpClient } from "./core/http/HttpClient.js";
 import { ScraperEngine } from "./core/scraper/ScraperEngine.js";
+import { StaticStrategy } from "./strategies/StaticStrategy.js";
+import { BrowserStrategy } from "./strategies/BrowserStrategy.js";
 import { ExtractionEngine } from "./extractors/ExtractionEngine.js";
 import { ConfigLoader } from "./core/config/ConfigLoader.js";
 import { scrapeRoute } from "./api/routes/scrape.js";
@@ -12,7 +14,9 @@ const app = Fastify({
 
 // Dependencies
 const httpClient = new HttpClient();
-const scraperEngine = new ScraperEngine(httpClient);
+const staticStrategy = new StaticStrategy(httpClient);
+const browserStrategy = new BrowserStrategy();
+const scraperEngine = new ScraperEngine(staticStrategy, browserStrategy);
 const extractionEngine = new ExtractionEngine();
 const configLoader = new ConfigLoader();
 

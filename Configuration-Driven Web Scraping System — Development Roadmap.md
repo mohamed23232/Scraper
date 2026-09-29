@@ -862,6 +862,8 @@ parseNumber
 
 # Phase 5 — Dynamic Websites
 
+**Status: Complete.**
+
 Some websites won't work with a simple HTTP request.
 
 For example:
@@ -882,7 +884,7 @@ This is where Playwright comes in.
 
 # 19. Create Browser Strategy
 
-Create:
+Implemented in:
 
 ```text
 src/
@@ -892,15 +894,22 @@ src/
     └── BrowserStrategy.ts
 ```
 
-Use an interface:
+The interface ended up carrying one optional second argument beyond the original plan:
 
 ```typescript
+interface ScrapeOptions {
+    waitFor?: string;
+    timeout?: number;
+}
+
 interface ScrapingStrategy {
-
-    scrape(url: string): Promise<string>;
-
+    scrape(url: string, options?: ScrapeOptions): Promise<string>;
 }
 ```
+
+`StaticStrategy` wraps the existing `HttpClient` and ignores `options` (there's nothing for a plain HTTP GET to wait for). `BrowserStrategy` launches a fresh headless Chromium via Playwright per call, navigates, optionally calls `page.waitForSelector(options.waitFor)`, reads `page.content()`, and — inside a `try/finally` — always closes the browser, including when navigation or the wait times out. A new browser per request is simple and correct but not fast; pooling/reusing a browser instance is a Phase 12 (production hardening) concern, not this one.
+
+`ScraperEngine` no longer talks to `HttpClient` directly — it takes both strategies in its constructor and picks one per call based on `options.type`, then still owns `cheerio.load(html)` itself (parsing stays the engine's job either way; the strategies only ever return a raw HTML string).
 
 Then:
 
@@ -944,7 +953,7 @@ The engine chooses the appropriate strategy.
 
 # 21. Browser Configuration
 
-Eventually support options such as:
+Supported now, on all three request shapes:
 
 ```json
 {
@@ -958,19 +967,23 @@ Eventually support options such as:
 }
 ```
 
-The browser strategy can:
+`scraperOptionsSchema` (in `ScraperConfig.ts`) is the single schema validating this shape everywhere it can appear: a `configs/websites/<id>.json` file's `scraper` field (required), and an optional `scraper` field on both the inline-`config` and flat request bodies (defaulting to `static` when omitted, so every request made before this phase still behaves identically).
+
+The browser strategy does:
 
 ```text
 Launch browser
       ↓
 Navigate
       ↓
-Wait for required element
+Wait for required element (if waitFor given)
       ↓
 Obtain DOM
       ↓
 Pass DOM to extraction engine
 ```
+
+Verified against a page whose `.product` element is injected by a `setTimeout` after load (so it's genuinely absent from the raw HTTP response): the `static` strategy correctly fails to find it, `browser` without `waitFor` is a race against that timer, and `browser` with `waitFor: ".product"` finds it reliably every time — across all three request modes (flat, inline `config`, and `website` id loading a file whose `scraper.type` is `"browser"`).
 
 Respect website terms, robots policies, authentication boundaries, and access controls. The system should not attempt to defeat CAPTCHAs or other access-control mechanisms.
 
@@ -1596,12 +1609,12 @@ You are here.
 ## Milestone 6
 
 ```text
-[ ] ScrapingStrategy interface
-[ ] StaticStrategy
-[ ] BrowserStrategy
-[ ] Playwright
-[ ] waitFor
-[ ] browser timeout
+[x] ScrapingStrategy interface
+[x] StaticStrategy
+[x] BrowserStrategy
+[x] Playwright
+[x] waitFor
+[x] browser timeout
 ```
 
 ---

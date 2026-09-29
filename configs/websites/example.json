@@ -8,12 +8,12 @@
     },
 
     "item": {
-        "selector": "body"
+        "selector": "html"
     },
 
     "fields": {
         "title": {
-            "selector": "h1",
+            "selector": "title",
             "extract": "text"
         },
 

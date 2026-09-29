@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { fieldConfigSchema } from "../../core/config/ScraperConfig.js";
+import { fieldConfigSchema, scraperOptionsSchema } from "../../core/config/ScraperConfig.js";
 import { TRANSFORM_NAMES } from "../../transforms/TransformPipeline.js";
 
 const flatRequestSchema = z.object({
@@ -15,11 +15,15 @@ const flatRequestSchema = z.object({
 
     attribute: z.string().optional(),
 
-    transform: z.array(z.enum(TRANSFORM_NAMES)).optional()
+    transform: z.array(z.enum(TRANSFORM_NAMES)).optional(),
+
+    scraper: scraperOptionsSchema.optional()
 });
 
 const inlineConfigRequestSchema = z.object({
     url: z.url(),
+
+    scraper: scraperOptionsSchema.optional(),
 
     config: z.object({
         item: z.object({
