@@ -3,6 +3,9 @@ import { TrimTransform } from "./TrimTransform.js";
 import { RemoveCurrencyTransform } from "./RemoveCurrencyTransform.js";
 import { ParseNumberTransform } from "./ParseNumberTransform.js";
 import { AbsoluteUrlTransform } from "./AbsoluteUrlTransform.js";
+import { RegexTransform } from "./RegexTransform.js";
+import { ReplaceTransform } from "./ReplaceTransform.js";
+import { DefaultTransform } from "./DefaultTransform.js";
 
 export const TRANSFORM_NAMES = [
     "trim",
@@ -13,6 +16,13 @@ export const TRANSFORM_NAMES = [
 
 export type TransformName = typeof TRANSFORM_NAMES[number];
 
+export type TransformSpec =
+    | TransformName
+    | { name: "parseNumber"; decimal?: "." | "," | undefined }
+    | { name: "regex"; pattern: string; group?: number | undefined; flags?: string | undefined }
+    | { name: "replace"; pattern: string; replacement: string; flags?: string | undefined }
+    | { name: "default"; value?: unknown };
+
 const REGISTRY: Record<TransformName, Transform> = {
     trim: new TrimTransform(),
     removeCurrency: new RemoveCurrencyTransform(),
@@ -20,34 +30,56 @@ const REGISTRY: Record<TransformName, Transform> = {
     absoluteUrl: new AbsoluteUrlTransform()
 };
 
+function resolveTransform(spec: TransformSpec): Transform {
+
+    if (typeof spec === "string") {
+        return REGISTRY[spec];
+    }
+
+    switch (spec.name) {
+
+        case "parseNumber":
+            return new ParseNumberTransform(spec.decimal);
+
+        case "regex":
+            return new RegexTransform(spec.pattern, spec.group, spec.flags);
+
+        case "replace":
+            return new ReplaceTransform(spec.pattern, spec.replacement, spec.flags);
+
+        case "default":
+            return new DefaultTransform(spec.value);
+    }
+}
+
 export class TransformPipeline {
 
     static run(
         value: unknown,
-        names: readonly TransformName[] | undefined,
+        specs: readonly TransformSpec[] | undefined,
         context: TransformContext
     ): unknown {
 
-        if (!names || names.length === 0) {
+        if (!specs || specs.length === 0) {
             return value;
         }
 
-        return names.reduce<unknown>(
-            (acc, name) => REGISTRY[name].apply(acc, context),
+        return specs.reduce<unknown>(
+            (acc, spec) => resolveTransform(spec).apply(acc, context),
             value
         );
     }
 
     static runOnExtracted(
-        value: string | string[],
-        names: readonly TransformName[] | undefined,
+        value: unknown,
+        specs: readonly TransformSpec[] | undefined,
         context: TransformContext
     ): unknown {
 
         if (Array.isArray(value)) {
-            return value.map((entry) => TransformPipeline.run(entry, names, context));
+            return value.map((entry) => TransformPipeline.run(entry, specs, context));
         }
 
-        return TransformPipeline.run(value, names, context);
+        return TransformPipeline.run(value, specs, context);
     }
 }

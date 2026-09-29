@@ -7,11 +7,14 @@ import { BrowserStrategy } from "./strategies/BrowserStrategy.js";
 import { ExtractionEngine } from "./extractors/ExtractionEngine.js";
 import { ConfigLoader } from "./core/config/ConfigLoader.js";
 import { PaginationEngine } from "./core/pagination/PaginationEngine.js";
+import { registerErrorHandler } from "./core/errors/errorHandler.js";
 import { scrapeRoute } from "./api/routes/scrape.js";
 
 const app = Fastify({
     logger: true
 });
+
+registerErrorHandler(app);
 
 // Dependencies
 const httpClient = new HttpClient();
@@ -26,6 +29,13 @@ const paginationEngine = new PaginationEngine(scraperEngine, extractionEngine);
 app.register(async (app) => {
     await scrapeRoute(app, scraperEngine, extractionEngine, configLoader, paginationEngine);
 });
+
+app.addHook("onClose", async () => {
+    await browserStrategy.close();
+});
+
+process.on("SIGINT", () => void app.close());
+process.on("SIGTERM", () => void app.close());
 
 const start = async () => {
     try {

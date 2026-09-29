@@ -4,6 +4,7 @@ import type { AnyNode } from "domhandler";
 import { TextExtractor } from "./TextExtractor.js";
 import { AttributeExtractor } from "./AttributeExtractor.js";
 import { HtmlExtractor } from "./HtmlExtractor.js";
+import { ScraperError } from "../core/errors/ScraperError.js";
 
 export type ExtractionType = "text" | "html" | "attribute";
 
@@ -17,11 +18,18 @@ export interface FieldExtractionOptions {
     selector: string;
     extract: ExtractionType;
     attribute?: string | undefined;
+    multiple?: boolean | undefined;
+    required?: boolean | undefined;
+    default?: unknown;
 }
 
 export type ItemFields = Record<string, FieldExtractionOptions>;
 
-export type ExtractedItem = Record<string, string | string[]>;
+export type ExtractedItem = Record<string, unknown>;
+
+export interface ExtractItemsOptions {
+    allowEmpty?: boolean | undefined;
+}
 
 export class ExtractionEngine {
 
@@ -33,9 +41,7 @@ export class ExtractionEngine {
         const elements = $(options.selector);
 
         if (elements.length === 0) {
-            throw new Error(
-                `Selector not found: ${options.selector}`
-            );
+            throw new ScraperError("SELECTOR_NOT_FOUND", `Selector not found: ${options.selector}`);
         }
 
         const values: string[] = [];
@@ -52,26 +58,28 @@ export class ExtractionEngine {
     extractItems(
         $: CheerioAPI,
         itemSelector: string,
-        fields: ItemFields
+        fields: ItemFields,
+        options?: ExtractItemsOptions
     ): ExtractedItem[] {
 
         const items = $(itemSelector);
 
         if (items.length === 0) {
-            throw new Error(
-                `Selector not found: ${itemSelector}`
-            );
+            if (options?.allowEmpty) {
+                return [];
+            }
+            throw new ScraperError("SELECTOR_NOT_FOUND", `Selector not found: ${itemSelector}`);
         }
 
         const results: ExtractedItem[] = [];
 
-        items.each((_, itemElement) => {
+        items.each((index, itemElement) => {
 
             const itemScope = $(itemElement);
             const item: ExtractedItem = {};
 
             for (const [fieldName, fieldOptions] of Object.entries(fields)) {
-                item[fieldName] = this.extractField($, itemScope, fieldName, fieldOptions);
+                item[fieldName] = this.extractField($, itemScope, fieldName, index, fieldOptions);
             }
 
             results.push(item);
@@ -84,30 +92,40 @@ export class ExtractionEngine {
         $: CheerioAPI,
         scope: Cheerio<AnyNode>,
         fieldName: string,
+        itemIndex: number,
         options: FieldExtractionOptions
-    ): string | string[] {
+    ): unknown {
 
         const matches = scope.find(options.selector);
+        const required = options.required ?? true;
+        const multiple = options.multiple ?? false;
 
         if (matches.length === 0) {
-            throw new Error(
-                `Field selector not found: '${fieldName}' (${options.selector})`
+
+            if (!required) {
+                return options.default ?? null;
+            }
+
+            throw new ScraperError(
+                "SELECTOR_NOT_FOUND",
+                `Field selector not found: '${fieldName}' (${options.selector}) in item #${itemIndex}`
             );
         }
 
-        if (matches.length === 1) {
-            return this.extractValue(matches, options.extract, options.attribute);
+        if (multiple) {
+
+            const values: string[] = [];
+
+            matches.each((_, match) => {
+                values.push(
+                    this.extractValue($(match), options.extract, options.attribute)
+                );
+            });
+
+            return values;
         }
 
-        const values: string[] = [];
-
-        matches.each((_, match) => {
-            values.push(
-                this.extractValue($(match), options.extract, options.attribute)
-            );
-        });
-
-        return values;
+        return this.extractValue(matches.first(), options.extract, options.attribute);
     }
 
     private extractValue(
@@ -127,7 +145,8 @@ export class ExtractionEngine {
             case "attribute":
 
                 if (!attribute) {
-                    throw new Error(
+                    throw new ScraperError(
+                        "INVALID_CONFIGURATION",
                         "Attribute name is required for attribute extraction"
                     );
                 }
@@ -135,7 +154,8 @@ export class ExtractionEngine {
                 return new AttributeExtractor(attribute).extract(element);
 
             default:
-                throw new Error(
+                throw new ScraperError(
+                    "INVALID_CONFIGURATION",
                     `Unsupported extraction type: ${extract as string}`
                 );
         }

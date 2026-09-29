@@ -1,7 +1,9 @@
 {
     "id": "example",
 
-    "website": "https://example.com",
+    "schemaVersion": 1,
+
+    "startUrl": "https://example.com",
 
     "scraper": {
         "type": "static"

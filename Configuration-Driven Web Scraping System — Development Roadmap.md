@@ -125,13 +125,17 @@ Phase 3  → Configuration system
 Phase 4  → Transformations
 Phase 5  → Dynamic websites / Playwright
 Phase 6  → Pagination
-Phase 7  → Scraping jobs
-Phase 8  → Database and saved configurations
-Phase 9  → Caching
-Phase 10 → Unity integration
-Phase 11 → Admin/configuration UI
-Phase 12 → Production hardening
+Phase 7  → Better data models & standard errors
+Phase 8  → Website configuration manager (scrape by website id)
+Phase 9  → Database
+Phase 10 → Caching
+Phase 11 → Scraping jobs
+Phase 12 → Queue system
+Phase 13 → Unity client
+Phase 14 → Admin/configuration UI
 ```
+
+(This list previously didn't match the phase headers below it — e.g. it once said "Phase 7 → Scraping jobs" when the actual Phase 7 section below is "Better Data Models." It's now kept in sync with the real headers.)
 
 Do not implement everything at once.
 
@@ -836,7 +840,7 @@ Transformation 3
 Final value
 ```
 
-Example:
+Example (as actually implemented — `parseNumber` strips thousands-separator commas itself, so there's no separate `removeComma` step):
 
 ```text
 "$ 1,299.99"
@@ -848,10 +852,6 @@ trim
 removeCurrency
       ↓
 "1,299.99"
-      ↓
-removeComma
-      ↓
-"1299.99"
       ↓
 parseNumber
       ↓
@@ -987,6 +987,8 @@ Verified against a page whose `.product` element is injected by a `setTimeout` a
 
 Respect website terms, robots policies, authentication boundaries, and access controls. The system should not attempt to defeat CAPTCHAs or other access-control mechanisms.
 
+**Revised during the later design/security audit** (see §22a and §29): `BrowserStrategy` and `StaticStrategy` were both substantially rewritten. `StaticStrategy`/`HttpClient` silently ignored `scraper.timeout` entirely — fixed with a real `AbortController` timeout. `BrowserStrategy` launched (and leaked) a brand-new Chromium instance on every single call — including once per page during pagination — with no check on *what* it was allowed to navigate to; a demonstrated `file:///` local-file read is now blocked, and it reuses one shared, concurrency-limited browser instead, closed on server shutdown.
+
 ---
 
 # Phase 6 — Pagination
@@ -1054,8 +1056,6 @@ maxItems     — hard cap on total items collected across all pages, trims the f
 duplicate URL detection — a Set of visited (absolute) URLs; landing on one already seen stops pagination immediately
 ```
 
-`timeout` isn't a separate pagination-level safeguard — each page fetch already goes through `ScraperEngine`, which passes the existing `scraper.timeout` (from Phase 5) down to the browser strategy per page, so a hung page can't stall pagination forever.
-
 One more implicit safeguard: reaching the *last* page (where `nextSelector` no longer matches anything, or the matched element has no `href`) or a page where the item selector matches zero elements (past the first page — the first page still throws on a genuinely wrong selector, matching Phase 2's strict behavior) stops the loop gracefully and returns whatever was collected, rather than throwing.
 
 **Verified against real sites/scenarios, not just typechecked:**
@@ -1065,49 +1065,56 @@ One more implicit safeguard: reaching the *last* page (where `nextSelector` no l
 
 These prevent accidental infinite scraping.
 
+**Revised during the later design/security audit** (see §22a for full details): an actual overall time budget (`maxDurationMs`) was added — the line above about `timeout` not being a pagination-level safeguard is no longer true. The duplicate-URL check now normalizes URLs first (strips the fragment, sorts query params, trims a trailing slash) instead of comparing raw strings. A second safeguard was added alongside it: if a page's *content* is identical to the previous page's (some sites clamp an out-of-range page number back to the last valid page instead of 404ing), pagination stops too. An optional `delayMs` and `failOnPageError` were also added. Every stopping condition is now reported back as `metadata.stopReason` instead of being indistinguishable from a normal "ran out of pages" exit.
+
 ---
 
 # Phase 7 — Better Data Models
 
-At this point, introduce a consistent internal result model.
+**Status: Complete** (landed early, during a design/security audit — see below).
 
-Something like:
+Implemented in:
 
-```typescript
-interface ScrapeResult<T> {
+```text
+src/
+└── core/
+    └── errors/
+        ├── ScraperError.ts     (typed error + error codes)
+        └── errorHandler.ts     (maps codes → HTTP status, one Fastify setErrorHandler)
+```
 
-    success: boolean;
+`ScraperError` carries `{code, message, details?}`; the route no longer catches anything itself — every thrown error (from extraction, transforms, config loading, the URL policy, the scraper strategies) propagates to one `app.setErrorHandler`, which maps each code to an HTTP status and returns the standard envelope below. A non-`ScraperError` (a genuine bug) is logged server-side and returned as a generic `500` — its message/stack is never sent to the client.
 
-    url: string;
+Every response — success or error — now looks like:
 
-    data?: T;
-
-    error?: {
-        code: string;
-        message: string;
-    };
-
-    metadata?: {
-        duration: number;
-        pages: number;
-        items: number;
-    };
+```json
+{
+    "success": true,
+    "url": "https://example.com",
+    "data": [ { "title": "Example Domain" } ],
+    "metadata": {
+        "durationMs": 216,
+        "items": 1,
+        "pages": 1,
+        "stopReason": "lastPage",
+        "truncated": false,
+        "warnings": []
+    }
 }
 ```
 
-This makes your API predictable.
+`pages`/`stopReason`/`truncated`/`warnings` only appear for `config`/`website` mode (they come from `PaginationEngine`, Phase 6); flat mode only gets `durationMs`/`items`.
 
 ---
 
 # 22. Error Handling
 
-Define standard error types.
-
-For example:
+Implemented exactly as planned, with one deliberate deviation:
 
 ```text
 INVALID_URL
 INVALID_CONFIGURATION
+URL_NOT_ALLOWED          (added — the SSRF/private-network policy needed its own code)
 REQUEST_FAILED
 TIMEOUT
 PAGE_NOT_FOUND
@@ -1115,10 +1122,19 @@ SELECTOR_NOT_FOUND
 BROWSER_ERROR
 PARSING_ERROR
 TRANSFORMATION_ERROR
-PAGINATION_LIMIT
 ```
 
-Instead of returning random errors from different parts of the application.
+`PAGINATION_LIMIT` was deliberately **not** added. Hitting `maxPages`/`maxItems` isn't an error — the request still succeeds (`success: true`); which limit was hit is reported as `metadata.stopReason` (`"maxPages" | "maxItems" | "lastPage" | "duplicateUrl" | "duplicateContent" | "emptyPage" | "timeout" | "error"`) instead. Treating a page-count cap as a thrown error would have meant a perfectly normal, expected stopping point looked identical to a real failure to the caller.
+
+Status → HTTP mapping (`errorHandler.ts`):
+
+```text
+400  INVALID_URL, INVALID_CONFIGURATION
+403  URL_NOT_ALLOWED
+422  SELECTOR_NOT_FOUND, TRANSFORMATION_ERROR
+502  REQUEST_FAILED, PAGE_NOT_FOUND, BROWSER_ERROR, PARSING_ERROR
+504  TIMEOUT
+```
 
 Example:
 
@@ -1128,10 +1144,111 @@ Example:
 
     "error": {
         "code": "SELECTOR_NOT_FOUND",
-        "message": "Could not find selector '.product-name'"
+        "message": "Selector not found: .product-name"
     }
 }
 ```
+
+---
+
+# 22a. Config Option Reference (added during a design/security audit)
+
+A design review after Phase 6 added a batch of config options across `field`, `item`, `scraper`, and `pagination` that don't belong to any single phase above. Every one is optional — an existing config with none of these still validates and behaves exactly as before. This section is the one place they're all documented together.
+
+## Field options (inside `fields.<name>`)
+
+```json
+{
+    "fields": {
+        "rating": {
+            "selector": ".rating",
+            "extract": "text",
+
+            "multiple": false,
+            "required": false,
+            "default": null,
+            "type": "string",
+
+            "transform": [
+                "trim",
+                { "name": "parseNumber", "decimal": "," },
+                { "name": "regex", "pattern": "(\\d+)", "group": 1 },
+                { "name": "replace", "pattern": "\\s+", "replacement": " " },
+                { "name": "default", "value": "unknown" }
+            ]
+        }
+    }
+}
+```
+
+- **`multiple`** (default `false`) — when a field's selector matches more than one element inside an item, `false` takes the first match (a plain string), `true` always returns every match as an array. Before this option existed, the field silently switched between a string and an array depending on how many elements happened to match — this makes that a deliberate choice instead of an accident of the page's markup.
+- **`required`** (default `true`) — when the field's selector matches nothing inside an item: `true` throws `SELECTOR_NOT_FOUND` naming the field and the item's index; `false` uses `default` instead (or `null` if no `default` is set).
+- **`default`** — the fallback value used when `required: false` and the selector didn't match. Any JSON value, not just a string.
+- **`type`** — `"string" | "number" | "boolean" | "url"`. After extraction and any transforms run, the final value (or every element, if `multiple: true`) is checked against this type; a mismatch throws `TRANSFORMATION_ERROR` naming the field. Useful as a safety net when a `transform` is supposed to produce a specific type (e.g. `parseNumber` → `"number"`).
+- **`transform`** — an array where each entry is either a bare name (`"trim"`, `"removeCurrency"`, `"parseNumber"`, `"absoluteUrl"`) or an object for the parameterized ones:
+  - `{ "name": "parseNumber", "decimal": "." | "," }` — `","` treats `.` as a thousands separator and `,` as the decimal point (e.g. `"1.299,99"` → `1299.99`).
+  - `{ "name": "regex", "pattern": string, "group"?: number, "flags"?: string }` — matches `pattern` against the value and returns capture group `group` (default `0`, the whole match).
+  - `{ "name": "replace", "pattern": string, "replacement": string, "flags"?: string }` — regex replace (default flags `"g"`).
+  - `{ "name": "default", "value"?: unknown }` — mid-pipeline fallback: substitutes `value` only if the value *at that point in the pipeline* is `null`/`undefined`/`""` (different from field-level `default`, which only fires when the selector matched nothing at all).
+
+## Item options (inside `item`)
+
+```json
+{
+    "item": {
+        "selector": ".product",
+        "allowEmpty": false
+    }
+}
+```
+
+- **`allowEmpty`** (default `false`) — when the item selector matches nothing on the first page: `false` throws (a broken selector almost always means a wrong config); `true` returns `[]` instead — for legitimate zero-result cases like a search with no matches.
+
+## Scraper options (inside `scraper`)
+
+Unchanged from Phase 5 (`type`, `waitFor`, `timeout`) — `timeout` is now actually honored in static mode too (it was silently ignored before this audit).
+
+## Pagination options (inside `pagination`)
+
+```json
+{
+    "pagination": {
+        "enabled": true,
+        "nextSelector": "li.next a",
+        "maxPages": 10,
+        "maxItems": 500,
+        "maxDurationMs": 60000,
+        "delayMs": 250,
+        "failOnPageError": false
+    }
+}
+```
+
+- **`maxDurationMs`** (default `60000`) — overall wall-clock budget for the whole paginated scrape, not per page. Each page's own timeout gets clipped to whatever's left of the budget.
+- **`delayMs`** — a pause before fetching each page after the first, for sites that rate-limit or just to be a considerate scraper.
+- **`failOnPageError`** (default `false`) — when a page after the first fails (network error, selector suddenly missing, timeout): `false` stops pagination and returns whatever was collected so far (`success: true`, `metadata.stopReason: "error"`, a message in `metadata.warnings`); `true` fails the whole request instead, like a page-1 failure always does.
+
+`metadata.stopReason` on every `config`/`website`-mode response is one of: `"maxPages" | "maxItems" | "lastPage" | "duplicateUrl" | "duplicateContent" | "emptyPage" | "timeout" | "error"`.
+
+## Top-level config options
+
+```json
+{
+    "id": "example",
+    "schemaVersion": 1,
+    "startUrl": "https://example.com"
+}
+```
+
+- **`schemaVersion`** — currently only `1` is valid; reserved for when the config shape needs a breaking change later.
+- **`startUrl`** — the site's URL. Renamed from `website` (the old name is still accepted, with a console warning, so existing config files don't need to change immediately — though both shipped configs in this repo have been migrated).
+
+## Request-level additions
+
+- In `website` mode, the request's `url` is now optional — it defaults to the config's `startUrl`. If both are given, they must be on the same hostname (guards against accidentally applying one site's selectors to a completely different site).
+- A request body must unambiguously match exactly one of the three shapes (flat / inline `config` / `website`) — extra or conflicting fields (e.g. sending both `config` and `website`) are now a `400`, where they used to be silently accepted and partially ignored.
+- **`ALLOW_INLINE_CONFIGS`** (env var; default: `true` unless `NODE_ENV=production`) — when `false`, flat and inline-`config` requests are rejected; only `website`-id requests (against saved, reviewed configs) are served. Meant for a production deployment that only wants to expose pre-approved scrapes.
+- **`ALLOW_PRIVATE_NETWORKS`** (env var; default `false`) — must stay `false`/unset anywhere this API is actually reachable; see §29.
 
 ---
 
@@ -1488,9 +1605,9 @@ This allows you to create configurations visually instead of manually editing JS
 
 ---
 
-# 25. Recommended Final Project Structure
+# 25. Project Structure
 
-Eventually aim for:
+**Status: below is the actual current tree**, not an aspirational target — kept up to date as phases land. `api/routes/websites.ts`, `api/routes/jobs.ts`, and `workers/` from the original plan don't exist yet (Phases 8, 9/11, 12 respectively); `strategies/ApiStrategy.ts` (a JSON/API-only scraper strategy) was never called for by any phase actually implemented and was dropped from the plan.
 
 ```text
 scraper-system/
@@ -1499,32 +1616,41 @@ scraper-system/
 │   │
 │   ├── api/
 │   │   ├── routes/
-│   │   │   ├── scrape.ts
-│   │   │   ├── websites.ts
-│   │   │   └── jobs.ts
+│   │   │   └── scrape.ts
 │   │   │
-│   │   ├── schemas/
-│   │   │   ├── scrape.schema.ts
-│   │   │   └── website.schema.ts
-│   │   │
-│   │   └── server.ts
+│   │   └── schemas/
+│   │       └── scrape.schema.ts
 │   │
 │   ├── core/
-│   │   ├── ScraperEngine.ts
-│   │   ├── ScrapeContext.ts
-│   │   ├── ScrapeResult.ts
+│   │   ├── scraper/
+│   │   │   └── ScraperEngine.ts        (fetch → cheerio; picks static vs. browser strategy)
 │   │   │
-│   │   └── config/
-│   │       ├── ScraperConfig.ts
-│   │       └── ConfigLoader.ts
+│   │   ├── config/
+│   │   │   ├── ScraperConfig.ts        (Zod schemas — field/scraper/pagination/site config)
+│   │   │   ├── ConfigLoader.ts         (loads + validates configs/websites/<id>.json)
+│   │   │   └── featureFlags.ts         (ALLOW_INLINE_CONFIGS)
+│   │   │
+│   │   ├── errors/
+│   │   │   ├── ScraperError.ts         (typed error + error codes)
+│   │   │   └── errorHandler.ts         (Fastify setErrorHandler — code → HTTP status)
+│   │   │
+│   │   ├── http/
+│   │   │   ├── HttpClient.ts           (manual redirect-following, timeout, FetchedPage)
+│   │   │   └── FetchedPage.ts
+│   │   │
+│   │   ├── pagination/
+│   │   │   └── PaginationEngine.ts     (multi-page loop, safeguards, stopReason)
+│   │   │
+│   │   └── security/
+│   │       └── UrlPolicy.ts            (protocol + private-IP/SSRF allowlist)
 │   │
 │   ├── strategies/
 │   │   ├── ScrapingStrategy.ts
 │   │   ├── StaticStrategy.ts
-│   │   ├── BrowserStrategy.ts
-│   │   └── ApiStrategy.ts
+│   │   └── BrowserStrategy.ts          (shared/reused Chromium instance + concurrency limit)
 │   │
 │   ├── extractors/
+│   │   ├── Extractor.ts
 │   │   ├── ExtractionEngine.ts
 │   │   ├── TextExtractor.ts
 │   │   ├── AttributeExtractor.ts
@@ -1532,31 +1658,38 @@ scraper-system/
 │   │
 │   ├── transforms/
 │   │   ├── Transform.ts
+│   │   ├── TransformPipeline.ts        (name/param resolution + registry)
+│   │   ├── applyFieldTransforms.ts     (per-item orchestration + type validation)
 │   │   ├── TrimTransform.ts
+│   │   ├── RemoveCurrencyTransform.ts
 │   │   ├── ParseNumberTransform.ts
-│   │   └── AbsoluteUrlTransform.ts
-│   │
-│   ├── workers/
-│   │   └── scraper.worker.ts
+│   │   ├── AbsoluteUrlTransform.ts
+│   │   ├── RegexTransform.ts
+│   │   ├── ReplaceTransform.ts
+│   │   └── DefaultTransform.ts
 │   │
 │   └── index.ts
 │
 ├── configs/
 │   └── websites/
 │       ├── example.json
-│       └── ...
+│       └── wikipedia.json
 │
 ├── tests/
-│   ├── extractors/
-│   ├── transforms/
-│   └── strategies/
+│   ├── helpers/
+│   │   ├── testServer.ts               (local fixture HTTP server for tests)
+│   │   └── buildApp.ts                 (in-process Fastify app for route tests)
+│   ├── fixtures/                       (saved HTML — no test depends on a live site)
+│   ├── setup.ts
+│   └── *.test.ts
 │
 ├── package.json
 ├── tsconfig.json
-├── .env
-├── .gitignore
-└── README.md
+├── vitest.config.ts
+└── .gitignore
 ```
+
+Not yet present, called for by later phases: `api/routes/websites.ts` + `website.schema.ts` (Phase 8), `api/routes/jobs.ts` + `workers/` (Phases 9/11/12), `.env`/`README.md`.
 
 ---
 
@@ -1567,25 +1700,23 @@ Follow this exact order.
 ## Milestone 1
 
 ```text
-[ ] Fastify server
+[x] Fastify server
 [x] Server runs
 [x] TypeScript configured
 [x] Dependencies installed
 ```
-
-You are here.
 
 ---
 
 ## Milestone 2
 
 ```text
-[ ] POST /scrape
-[ ] Validate URL
-[ ] HTTP request
-[ ] Download HTML
-[ ] Parse HTML with Cheerio
-[ ] Return page title
+[x] POST /scrape
+[x] Validate URL
+[x] HTTP request
+[x] Download HTML
+[x] Parse HTML with Cheerio
+[x] Return page title
 ```
 
 ---
@@ -1654,11 +1785,11 @@ You are here.
 ## Milestone 8
 
 ```text
-[ ] Standard errors
-[ ] Logging
-[ ] Request timeout
-[ ] Browser cleanup
-[ ] Better validation
+[x] Standard errors
+[x] Logging
+[x] Request timeout
+[x] Browser cleanup
+[x] Better validation
 ```
 
 ---
@@ -1710,7 +1841,7 @@ You are here.
 
 # 27. First Real Target
 
-Before adding Playwright, databases, queues, or Unity, make this work:
+**Achieved.** This works today exactly as originally envisioned — with two small corrections learned along the way: `example.com` no longer has an `<h1>` (its markup changed since this doc was written — see Phase 5's notes), and the item selector needed to be `html` rather than `body` so a field can reach `<title>` in `<head>`.
 
 ### Request
 
@@ -1724,12 +1855,12 @@ POST /scrape
 
     "config": {
         "item": {
-            "selector": "body"
+            "selector": "html"
         },
 
         "fields": {
             "title": {
-                "selector": "h1",
+                "selector": "title",
                 "extract": "text"
             }
         }
@@ -1747,11 +1878,20 @@ POST /scrape
         {
             "title": "Example Domain"
         }
-    ]
+    ],
+
+    "metadata": {
+        "durationMs": 216,
+        "items": 1,
+        "pages": 1,
+        "stopReason": "lastPage",
+        "truncated": false,
+        "warnings": []
+    }
 }
 ```
 
-Once this works, you have the foundation of the entire system.
+This is the foundation Phases 2–7 were all built on.
 
 ---
 
@@ -1853,75 +1993,50 @@ If the service is ever exposed outside your own machine, do not blindly allow ar
 At minimum consider:
 
 ```text
-URL validation
-request timeouts
-response-size limits
-redirect limits
-rate limiting
-concurrency limits
-resource limits
-logging
-authentication
+[x] URL validation           — protocol allowlist (http/https only), Zod-validated
+[x] SSRF / private-network blocking — see below
+[x] request timeouts         — per-request + overall pagination budget
+[x] redirect limits          — max 5 hops, each hop re-validated
+[x] concurrency limits       — browser strategy caps concurrent Chromium pages (default 2)
+[ ] response-size limits     — not yet implemented
+[ ] rate limiting            — not yet implemented
+[ ] resource limits          — not yet implemented (beyond browser concurrency)
+[x] logging                  — Fastify's logger + ScraperError codes
+[ ] authentication           — not yet implemented (fine while this only runs locally)
 ```
 
 Be especially careful about server-side request forgery (SSRF). A public scraper API should not be able to freely request internal network addresses or cloud metadata endpoints.
+
+**This was a real, demonstrated vulnerability, not a hypothetical** — an audit found that browser mode (`scraper.type: "browser"`) could navigate to `file:///` URLs and return local file contents as "scraped data," and nothing blocked requests to `127.0.0.1`, `10.0.0.0/8`, `169.254.169.254` (cloud metadata), etc. Fixed in `src/core/security/UrlPolicy.ts`: only `http`/`https` are allowed, and every hostname is DNS-resolved and checked against the private/loopback/link-local ranges before every fetch — the initial URL, every redirect hop, and every pagination "next" page. An `ALLOW_PRIVATE_NETWORKS=true` env var exists solely so the test suite can hit its own local fixture server; it must stay unset (or `false`) anywhere this API is actually reachable.
 
 Also respect the target site's terms, robots policies where applicable, copyright, and access controls.
 
 ---
 
-# 30. The Immediate Next Step
+# 30. Current Status and What's Actually Next
 
-Do **not** implement the whole roadmap now.
-
-Your immediate task is:
+Phases 1–7 are complete and tested (see each phase's own "Status" line above, and `tests/`). That original three-step arc this section used to describe —
 
 ```text
-                    POST /scrape
-                         │
-                         ▼
-                  Validate URL
-                         │
-                         ▼
-                    HTTP GET
-                         │
-                         ▼
-                       HTML
-                         │
-                         ▼
-                      Cheerio
-                         │
-                         ▼
-                    Page title
-                         │
-                         ▼
-                      JSON
+POST /scrape → validate → fetch → parse → extract page title
+                                              ↓
+                            HTML → CSS selector → Extractor → JSON
+                                              ↓
+                JSON configuration → Scraper Engine → Extractor → Transformers → JSON
 ```
 
-After that works, move to:
+— is exactly what exists today, plus pagination, dynamic (Playwright) sites, standard error codes, and a security-hardening pass (SSRF/private-network blocking, timeouts, redirect limits, browser reuse) that came out of an audit rather than a planned phase.
+
+Genuinely next, in order, per the phase list in Section 4:
 
 ```text
-HTML
- ↓
-CSS selector
- ↓
-Extractor
- ↓
-JSON
+Phase 8  → Website configuration manager (GET/POST/PUT/DELETE /websites)
+Phase 9  → Database (move configs off the filesystem)
+Phase 10 → Caching
+Phase 11 → Scraping jobs (async, for slow browser-mode scrapes)
+Phase 12 → Queue system (BullMQ + Redis, only once jobs exist)
+Phase 13 → Unity client
+Phase 14 → Admin UI
 ```
 
-Then:
-
-```text
-JSON configuration
- ↓
-Scraper Engine
- ↓
-Extractor
- ↓
-Transformers
- ↓
-JSON
-```
-
-That is the point where your project becomes a genuinely **configuration-driven scraping system** rather than a collection of website-specific scripts.
+Also still open, noted but deliberately deferred during the audit (see each phase's notes above for why): nested objects/sub-items in extraction, `pagination.mode: "click"` / `"urlPattern"` for pagination that isn't link-based, response-size limits, and rate limiting.

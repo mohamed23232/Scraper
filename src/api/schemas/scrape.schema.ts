@@ -1,6 +1,10 @@
 import { z } from "zod";
-import { fieldConfigSchema, scraperOptionsSchema, paginationConfigSchema } from "../../core/config/ScraperConfig.js";
-import { TRANSFORM_NAMES } from "../../transforms/TransformPipeline.js";
+import {
+    fieldConfigSchema,
+    scraperOptionsSchema,
+    paginationConfigSchema,
+    transformSpecSchema
+} from "../../core/config/ScraperConfig.js";
 
 const flatRequestSchema = z.object({
     url: z.url(),
@@ -15,10 +19,10 @@ const flatRequestSchema = z.object({
 
     attribute: z.string().optional(),
 
-    transform: z.array(z.enum(TRANSFORM_NAMES)).optional(),
+    transform: z.array(transformSpecSchema).optional(),
 
     scraper: scraperOptionsSchema.optional()
-});
+}).strict();
 
 const inlineConfigRequestSchema = z.object({
     url: z.url(),
@@ -27,7 +31,8 @@ const inlineConfigRequestSchema = z.object({
 
     config: z.object({
         item: z.object({
-            selector: z.string().min(1)
+            selector: z.string().min(1),
+            allowEmpty: z.boolean().optional()
         }),
 
         fields: z.record(z.string(), fieldConfigSchema)
@@ -37,14 +42,14 @@ const inlineConfigRequestSchema = z.object({
             ),
 
         pagination: paginationConfigSchema.optional()
-    })
-});
+    }).strict()
+}).strict();
 
 const websiteRequestSchema = z.object({
-    url: z.url(),
+    url: z.url().optional(),
 
     website: z.string().min(1)
-});
+}).strict();
 
 export const scrapeRequestSchema = z.union([
     inlineConfigRequestSchema,

@@ -1,7 +1,9 @@
 {
     "id": "wikipedia",
 
-    "website": "https://www.wikipedia.org/",
+    "schemaVersion": 1,
+
+    "startUrl": "https://www.wikipedia.org/",
 
     "scraper": {
         "type": "static"
