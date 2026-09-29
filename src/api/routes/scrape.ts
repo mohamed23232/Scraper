@@ -3,6 +3,7 @@ import { scrapeRequestSchema } from "../schemas/scrape.schema.js";
 import { ScraperEngine } from "../../core/scraper/ScraperEngine.js";
 import { ExtractionEngine } from "../../extractors/ExtractionEngine.js";
 import { ConfigLoader } from "../../core/config/ConfigLoader.js";
+import { PaginationEngine } from "../../core/pagination/PaginationEngine.js";
 import { TransformPipeline } from "../../transforms/TransformPipeline.js";
 import { applyFieldTransforms } from "../../transforms/applyFieldTransforms.js";
 
@@ -10,7 +11,8 @@ export async function scrapeRoute(
     app: FastifyInstance,
     scraperEngine: ScraperEngine,
     extractionEngine: ExtractionEngine,
-    configLoader: ConfigLoader
+    configLoader: ConfigLoader,
+    paginationEngine: PaginationEngine
 ) {
     app.post("/scrape", async (request, reply) => {
 
@@ -31,8 +33,14 @@ export async function scrapeRoute(
 
             if ("config" in body) {
 
-                const $ = await scraperEngine.scrape(body.url, body.scraper);
-                const items = extractionEngine.extractItems($, body.config.item.selector, body.config.fields);
+                const items = await paginationEngine.scrapeAllPages(
+                    body.url,
+                    body.config.item.selector,
+                    body.config.fields,
+                    body.scraper,
+                    body.config.pagination
+                );
+
                 data = applyFieldTransforms(items, body.config.fields, body.url);
 
             } else if ("website" in body) {
@@ -48,8 +56,14 @@ export async function scrapeRoute(
                     });
                 }
 
-                const $ = await scraperEngine.scrape(body.url, config.scraper);
-                const items = extractionEngine.extractItems($, config.item.selector, config.fields);
+                const items = await paginationEngine.scrapeAllPages(
+                    body.url,
+                    config.item.selector,
+                    config.fields,
+                    config.scraper,
+                    config.pagination
+                );
+
                 data = applyFieldTransforms(items, config.fields, body.url);
 
             } else {

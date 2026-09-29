@@ -20,6 +20,13 @@ export const scraperOptionsSchema = z.object({
     timeout: z.number().int().positive().optional()
 });
 
+export const paginationConfigSchema = z.object({
+    enabled: z.boolean(),
+    nextSelector: z.string().min(1),
+    maxPages: z.number().int().positive().optional(),
+    maxItems: z.number().int().positive().optional()
+});
+
 export const scraperConfigSchema = z.object({
     id: z.string().min(1),
 
@@ -35,9 +42,12 @@ export const scraperConfigSchema = z.object({
         .refine(
             (fields) => Object.keys(fields).length > 0,
             { message: "fields must contain at least one field" }
-        )
+        ),
+
+    pagination: paginationConfigSchema.optional()
 });
 
 export type FieldConfig = z.infer<typeof fieldConfigSchema>;
 export type ScraperOptionsConfig = z.infer<typeof scraperOptionsSchema>;
+export type PaginationConfig = z.infer<typeof paginationConfigSchema>;
 export type ScraperConfig = z.infer<typeof scraperConfigSchema>;

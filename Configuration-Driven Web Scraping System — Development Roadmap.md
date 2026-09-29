@@ -991,6 +991,8 @@ Respect website terms, robots policies, authentication boundaries, and access co
 
 # Phase 6 — Pagination
 
+**Status: Complete.**
+
 Many websites have:
 
 ```text
@@ -1001,7 +1003,16 @@ Page 4
 ...
 ```
 
-Your configuration should eventually support:
+Implemented in:
+
+```text
+src/
+└── core/
+    └── pagination/
+        └── PaginationEngine.ts
+```
+
+The configuration supports (as an optional `pagination` field alongside `item`/`fields`/`scraper`, on both a `configs/websites/<id>.json` file and an inline `config` request body):
 
 ```json
 {
@@ -1015,32 +1026,42 @@ Your configuration should eventually support:
 }
 ```
 
-The engine:
+`PaginationEngine.scrapeAllPages()` sits between `ScraperEngine` (fetch one page) and `ExtractionEngine` (extract one page's items), looping:
 
 ```text
 Page 1
  ↓
-Extract
+Extract items
  ↓
-Find next button
+Find next button (nextSelector's href, resolved against the current page's URL)
  ↓
 Page 2
  ↓
-Extract
+Extract items
  ↓
 Find next button
  ↓
 ...
 ```
 
-Important safeguards:
+When `pagination` is absent or `enabled: false`, behavior is exactly what it was before this phase — one page, one `extractItems()` call. This is opt-in, so nothing that worked before changed.
+
+Important safeguards, all implemented:
 
 ```text
-maxPages
-maxItems
-timeout
-duplicate URL detection
+maxPages     — hard cap on pages visited, defaults to 10 if omitted
+maxItems     — hard cap on total items collected across all pages, trims the final page's results if needed
+duplicate URL detection — a Set of visited (absolute) URLs; landing on one already seen stops pagination immediately
 ```
+
+`timeout` isn't a separate pagination-level safeguard — each page fetch already goes through `ScraperEngine`, which passes the existing `scraper.timeout` (from Phase 5) down to the browser strategy per page, so a hung page can't stall pagination forever.
+
+One more implicit safeguard: reaching the *last* page (where `nextSelector` no longer matches anything, or the matched element has no `href`) or a page where the item selector matches zero elements (past the first page — the first page still throws on a genuinely wrong selector, matching Phase 2's strict behavior) stops the loop gracefully and returns whatever was collected, rather than throwing.
+
+**Verified against real sites/scenarios, not just typechecked:**
+- `books.toscrape.com` (a real paginated site — 50 pages, 20 books each) with `maxPages: 3` → exactly 60 items, from the correct 3 pages.
+- Same site with `maxItems: 25` → exactly 25 items, stopping partway through page 2.
+- A synthetic two-page loop (page A links to page B, page B links back to page A) with `maxPages: 50` → stopped after 2 items (A, then B), proving duplicate-URL detection kicks in long before `maxPages` would, rather than looping forever.
 
 These prevent accidental infinite scraping.
 
@@ -1622,10 +1643,10 @@ You are here.
 ## Milestone 7
 
 ```text
-[ ] Pagination
-[ ] maxPages
-[ ] maxItems
-[ ] duplicate detection
+[x] Pagination
+[x] maxPages
+[x] maxItems
+[x] duplicate detection
 ```
 
 ---

@@ -6,6 +6,7 @@ import { StaticStrategy } from "./strategies/StaticStrategy.js";
 import { BrowserStrategy } from "./strategies/BrowserStrategy.js";
 import { ExtractionEngine } from "./extractors/ExtractionEngine.js";
 import { ConfigLoader } from "./core/config/ConfigLoader.js";
+import { PaginationEngine } from "./core/pagination/PaginationEngine.js";
 import { scrapeRoute } from "./api/routes/scrape.js";
 
 const app = Fastify({
@@ -19,10 +20,11 @@ const browserStrategy = new BrowserStrategy();
 const scraperEngine = new ScraperEngine(staticStrategy, browserStrategy);
 const extractionEngine = new ExtractionEngine();
 const configLoader = new ConfigLoader();
+const paginationEngine = new PaginationEngine(scraperEngine, extractionEngine);
 
 // Routes
 app.register(async (app) => {
-    await scrapeRoute(app, scraperEngine, extractionEngine, configLoader);
+    await scrapeRoute(app, scraperEngine, extractionEngine, configLoader, paginationEngine);
 });
 
 const start = async () => {

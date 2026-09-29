@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { fieldConfigSchema, scraperOptionsSchema } from "../../core/config/ScraperConfig.js";
+import { fieldConfigSchema, scraperOptionsSchema, paginationConfigSchema } from "../../core/config/ScraperConfig.js";
 import { TRANSFORM_NAMES } from "../../transforms/TransformPipeline.js";
 
 const flatRequestSchema = z.object({
@@ -34,7 +34,9 @@ const inlineConfigRequestSchema = z.object({
             .refine(
                 (fields) => Object.keys(fields).length > 0,
                 { message: "fields must contain at least one field" }
-            )
+            ),
+
+        pagination: paginationConfigSchema.optional()
     })
 });
 
