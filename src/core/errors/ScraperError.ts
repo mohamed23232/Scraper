@@ -3,6 +3,7 @@ export type ScraperErrorCode =
     | "URL_NOT_ALLOWED"
     | "INVALID_CONFIGURATION"
     | "CONFIG_NOT_FOUND"
+    | "JOB_NOT_FOUND"
     | "CONFLICT"
     | "UNAUTHORIZED"
     | "FORBIDDEN"

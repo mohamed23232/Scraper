@@ -10,10 +10,13 @@ import type { ConfigRepository } from "./core/config/ConfigRepository.js";
 import { FileConfigRepository } from "./core/config/FileConfigRepository.js";
 import { SqliteConfigRepository } from "./core/config/SqliteConfigRepository.js";
 import { PaginationEngine } from "./core/pagination/PaginationEngine.js";
+import { InMemoryCache } from "./core/cache/InMemoryCache.js";
+import { JobStore } from "./core/jobs/JobStore.js";
 import { registerErrorHandler } from "./core/errors/errorHandler.js";
 import { adminAuthWarningIfAny } from "./core/auth/adminAuth.js";
 import { scrapeRoute } from "./api/routes/scrape.js";
 import { websitesRoute } from "./api/routes/websites.js";
+import { jobsRoute } from "./api/routes/jobs.js";
 
 function buildConfigRepository(): ConfigRepository {
 
@@ -45,11 +48,14 @@ const scraperEngine = new ScraperEngine(staticStrategy, browserStrategy);
 const extractionEngine = new ExtractionEngine();
 const configLoader = buildConfigRepository();
 const paginationEngine = new PaginationEngine(scraperEngine, extractionEngine);
+const cache = new InMemoryCache();
+const jobStore = new JobStore();
 
 // Routes
 app.register(async (app) => {
-    await scrapeRoute(app, scraperEngine, extractionEngine, configLoader, paginationEngine);
+    await scrapeRoute(app, scraperEngine, extractionEngine, configLoader, paginationEngine, cache, jobStore);
     await websitesRoute(app, configLoader);
+    await jobsRoute(app, jobStore);
 });
 
 app.addHook("onClose", async () => {

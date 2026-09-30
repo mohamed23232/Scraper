@@ -3,6 +3,7 @@ import {
     fieldConfigSchema,
     scraperOptionsSchema,
     paginationConfigSchema,
+    cacheConfigSchema,
     transformSpecSchema
 } from "../../core/config/ScraperConfig.js";
 
@@ -21,13 +22,19 @@ const flatRequestSchema = z.object({
 
     transform: z.array(transformSpecSchema).optional(),
 
-    scraper: scraperOptionsSchema.optional()
+    scraper: scraperOptionsSchema.optional(),
+
+    cache: cacheConfigSchema.optional(),
+
+    async: z.boolean().optional()
 }).strict();
 
 const inlineConfigRequestSchema = z.object({
     url: z.url(),
 
     scraper: scraperOptionsSchema.optional(),
+
+    async: z.boolean().optional(),
 
     config: z.object({
         item: z.object({
@@ -41,14 +48,18 @@ const inlineConfigRequestSchema = z.object({
                 { message: "fields must contain at least one field" }
             ),
 
-        pagination: paginationConfigSchema.optional()
+        pagination: paginationConfigSchema.optional(),
+
+        cache: cacheConfigSchema.optional()
     }).strict()
 }).strict();
 
 const websiteRequestSchema = z.object({
     url: z.url().optional(),
 
-    website: z.string().min(1)
+    website: z.string().min(1),
+
+    async: z.boolean().optional()
 }).strict();
 
 export const scrapeRequestSchema = z.union([

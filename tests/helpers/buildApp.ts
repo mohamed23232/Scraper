@@ -7,14 +7,19 @@ import { ExtractionEngine } from "../../src/extractors/ExtractionEngine.js";
 import { FileConfigRepository } from "../../src/core/config/FileConfigRepository.js";
 import type { ConfigRepository } from "../../src/core/config/ConfigRepository.js";
 import { PaginationEngine } from "../../src/core/pagination/PaginationEngine.js";
+import { InMemoryCache } from "../../src/core/cache/InMemoryCache.js";
+import { JobStore } from "../../src/core/jobs/JobStore.js";
 import { registerErrorHandler } from "../../src/core/errors/errorHandler.js";
 import { scrapeRoute } from "../../src/api/routes/scrape.js";
 import { websitesRoute } from "../../src/api/routes/websites.js";
+import { jobsRoute } from "../../src/api/routes/jobs.js";
 
 export interface TestApp {
     app: FastifyInstance;
     browserStrategy: BrowserStrategy;
     configLoader: ConfigRepository;
+    cache: InMemoryCache;
+    jobStore: JobStore;
 }
 
 export async function buildTestApp(configsDir?: string): Promise<TestApp> {
@@ -29,13 +34,16 @@ export async function buildTestApp(configsDir?: string): Promise<TestApp> {
     const extractionEngine = new ExtractionEngine();
     const configLoader = new FileConfigRepository(configsDir);
     const paginationEngine = new PaginationEngine(scraperEngine, extractionEngine);
+    const cache = new InMemoryCache();
+    const jobStore = new JobStore();
 
     await app.register(async (instance) => {
-        await scrapeRoute(instance, scraperEngine, extractionEngine, configLoader, paginationEngine);
+        await scrapeRoute(instance, scraperEngine, extractionEngine, configLoader, paginationEngine, cache, jobStore);
         await websitesRoute(instance, configLoader);
+        await jobsRoute(instance, jobStore);
     });
 
     await app.ready();
 
-    return { app, browserStrategy, configLoader };
+    return { app, browserStrategy, configLoader, cache, jobStore };
 }

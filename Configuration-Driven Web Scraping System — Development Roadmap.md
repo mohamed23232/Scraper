@@ -1076,6 +1076,7 @@ Every response — success or error — now looks like:
     "metadata": {
         "durationMs": 216,
         "items": 1,
+        "cached": false,
         "pages": 1,
         "stopReason": "lastPage",
         "truncated": false,
@@ -1084,7 +1085,7 @@ Every response — success or error — now looks like:
 }
 ```
 
-`pages`/`stopReason`/`truncated`/`warnings` only appear for `config`/`website` mode (they come from `PaginationEngine`, Phase 6); flat mode only gets `durationMs`/`items`.
+`pages`/`stopReason`/`truncated`/`warnings` only appear for `config`/`website` mode (they come from `PaginationEngine`, Phase 6); flat mode only gets `durationMs`/`items`/`cached`. `cached` was added in Phase 10 — `true` when this response came from the cache instead of a fresh scrape.
 
 ---
 
@@ -1097,6 +1098,7 @@ INVALID_URL
 INVALID_CONFIGURATION
 URL_NOT_ALLOWED          (added — the SSRF/private-network policy needed its own code)
 CONFIG_NOT_FOUND         (added in Phase 8 — GET/PUT/DELETE /websites/:id on an unknown id)
+JOB_NOT_FOUND            (added in Phase 11 — GET /jobs/:id on an unknown id)
 CONFLICT                 (added in Phase 8 — POST /websites with a duplicate id)
 UNAUTHORIZED             (added in a later audit — missing/wrong admin API key)
 FORBIDDEN                (added in a later audit — writes disabled in production with no key set)
@@ -1118,7 +1120,7 @@ Status → HTTP mapping (`errorHandler.ts`):
 400  INVALID_URL, INVALID_CONFIGURATION
 401  UNAUTHORIZED
 403  URL_NOT_ALLOWED, FORBIDDEN
-404  CONFIG_NOT_FOUND
+404  CONFIG_NOT_FOUND, JOB_NOT_FOUND
 409  CONFLICT
 422  SELECTOR_NOT_FOUND, TRANSFORMATION_ERROR
 502  REQUEST_FAILED, PAGE_NOT_FOUND, BROWSER_ERROR, PARSING_ERROR, RESPONSE_TOO_LARGE
@@ -1199,6 +1201,19 @@ A design review after Phase 6 added a batch of config options across `field`, `i
 
 - **`blockResources`** (default `true`, browser mode only) — drops image/font/media requests before they're sent, since a scraper never needs them and they only cost bandwidth and time. Set `false` if a page's own JavaScript depends on an image actually loading (rare, but possible — e.g. a script that reads an image's dimensions).
 
+## Cache options (top-level `cache`, Phase 10)
+
+```json
+{
+    "cache": {
+        "enabled": true,
+        "ttl": 300
+    }
+}
+```
+
+Accepted on all three request shapes (flat, inline `config`, and a saved `website` config's own top-level field) — not nested under `scraper`/`item`/etc. `enabled` defaults to unset (no caching); `ttl` is in seconds and required whenever `cache` is present. A cache hit returns `metadata.cached: true` with everything else identical to a fresh scrape (same `data`, same pagination summary if paginated) except `durationMs`, which always reflects the real time this specific response took — near-zero on a hit.
+
 ## Pagination options (inside `pagination`)
 
 ```json
@@ -1240,6 +1255,7 @@ A design review after Phase 6 added a batch of config options across `field`, `i
 - A request body must unambiguously match exactly one of the three shapes (flat / inline `config` / `website`) — extra or conflicting fields (e.g. sending both `config` and `website`) are now a `400`, where they used to be silently accepted and partially ignored.
 - **`ALLOW_INLINE_CONFIGS`** (env var; default: `true` unless `NODE_ENV=production`) — when `false`, flat and inline-`config` requests are rejected; only `website`-id requests (against saved, reviewed configs) are served. Meant for a production deployment that only wants to expose pre-approved scrapes.
 - **`ALLOW_PRIVATE_NETWORKS`** (env var; default `false`) — must stay `false`/unset anywhere this API is actually reachable; see §29.
+- **`async`** (Phase 11, top-level, all three shapes) — `true` returns `202 { jobId, status: "queued" }` immediately instead of waiting for the scrape; poll `GET /jobs/:id` for the result. Request validation still happens synchronously either way — a malformed request is a `400` with no job ever created, `async` only defers the actual scraping work.
 
 ## Phase 8 hardening (a second audit, after `/websites` shipped)
 
@@ -1389,6 +1405,8 @@ You can keep configurations as JSON indefinitely; nothing requires switching.
 
 # Phase 10 — Caching
 
+**Status: Complete.**
+
 If Unity asks:
 
 ```text
@@ -1397,59 +1415,82 @@ Get products
 
 ten times in one minute, you don't necessarily want to scrape the website ten times.
 
-Architecture:
+Implemented in:
 
 ```text
-Unity
- ↓
-API
+src/
+└── core/
+    └── cache/
+        ├── Cache.ts        (interface: get/set with a TTL)
+        ├── InMemoryCache.ts (Map-based, TTL expiry, FIFO cap at 500 entries)
+        ├── cacheKey.ts      (deep, key-order-independent stable hash of the request)
+        └── withCache.ts     (the "check cache → else compute → store" wrapper the route uses)
+```
+
+Deliberately **in-memory, not Redis** — Redis is reserved for Phase 12, once a real queue exists to justify running external infrastructure. A single-process cache is exactly right for a single-process server.
+
+Architecture, exactly as planned:
+
+```text
+Request
  ↓
 Cache?
- ├── YES → Return cached result
+ ├── YES (hit)  → Return cached result, metadata.cached: true
  │
- └── NO
+ └── NO (miss)
        ↓
-    Scraper
+    Scraper / Extractor / Pagination (the real work)
        ↓
-    Store result
+    Store result (only if this request's config enabled caching)
        ↓
-    Return result
+    Return result, metadata.cached: false
 ```
 
-Example configuration:
+`cache: { enabled, ttl }` (seconds) is accepted on all three request shapes — flat, inline `config`, and a saved `website` config's own top-level `cache` field — matching how `scraper` and `pagination` options already work. It's opt-in per request/config; nothing is cached unless `cache.enabled: true` is explicitly set somewhere in the request.
 
-```json
-{
-    "cache": {
-        "enabled": true,
-        "ttl": 300
-    }
-}
-```
+The cache key is a hash of everything that defines "this exact scrape" — url, selector/config/website-id, transforms, scraper options — so two requests only share a cached result if they'd have produced the same one; changing a selector or transform is a cache miss, not stale data. What's cached is the finished `data` (and, for paginated scrapes, the `pages`/`stopReason`/`truncated`/`warnings` summary) — never `durationMs`, which is always computed fresh so a cache hit's near-zero response time is visible, not hidden.
 
-`300` means five minutes.
+**Verified live against real sites**: a cached `https://example.com` request dropped from ~210ms to 0ms on the second call with identical data; a paginated `books.toscrape.com` request (2 pages, 40 items) was cached with its `pages`/`stopReason`/`truncated` metadata intact on the cached response too. Also verified: caching disabled → every request re-fetches; a different selector → cache miss, not a false hit; a 1-second TTL → expires and re-fetches after it elapses (a real wait in the test, not a mocked clock).
 
 ---
 
 # Phase 11 — Scraping Jobs
 
+**Status: Complete.**
+
 For slow websites, don't make Unity wait for a browser operation.
 
-Eventually introduce jobs:
+Implemented in:
 
 ```text
-Unity
- ↓
-POST /scrape
- ↓
-Job created
- ↓
-202 Accepted
- ↓
-Job ID
+src/
+├── core/
+│   ├── jobs/
+│   │   └── JobStore.ts       (in-memory: queued → running → completed/failed, FIFO-capped)
+│   └── scrapeExecutor.ts     (the actual scrape logic, extracted so both sync and async paths share it)
+└── api/
+    └── routes/
+        └── jobs.ts           (GET /jobs/:id)
 ```
 
-Example:
+Same as Phase 10's cache, this is deliberately in-memory and single-process — no real queue yet (that's Phase 12). Adding `"async": true` to any `/scrape` request (any of the three shapes — flat, inline `config`, or `website`) is the opt-in:
+
+```text
+POST /scrape { ..., "async": true }
+ ↓
+Request validated synchronously (still 400 immediately if malformed — no job created for a bad request)
+ ↓
+Job created, status "queued"
+ ↓
+202 Accepted, { jobId, status: "queued" }
+ ↓
+(in the background, not blocking the response)
+ ↓
+Job → "running" → scraper/pagination/cache runs exactly like the synchronous path →
+      "completed" (with result) or "failed" (with error)
+```
+
+Without `async`, `/scrape` behaves exactly as before (200, immediate result) — nothing about the existing synchronous behavior changed.
 
 ```json
 {
@@ -1464,18 +1505,29 @@ Then:
 GET /jobs/abc123
 ```
 
-returns:
+returns one of:
 
+```json
+{ "jobId": "abc123", "status": "running" }
+```
 ```json
 {
     "jobId": "abc123",
     "status": "completed",
-
-    "result": {
-        ...
-    }
+    "result": { "url": "...", "data": [...], "metadata": { "durationMs": 8123, "items": 10, "cached": false } }
 }
 ```
+```json
+{
+    "jobId": "abc123",
+    "status": "failed",
+    "error": { "code": "SELECTOR_NOT_FOUND", "message": "Selector not found: .quote" }
+}
+```
+
+An unknown `jobId` is `404 JOB_NOT_FOUND` (new error code, §22).
+
+**Verified live against a real, genuinely slow browser-mode scrape** (`quotes.toscrape.com/js`, `scraper.type: "browser"`): the `POST /scrape` call returned in 9ms — not the ~8 seconds Chromium actually took to launch, navigate, and wait for `.quote` to render — and polling `GET /jobs/:id` showed `"running"` for several seconds before flipping to `"completed"` with the real quotes data. Also verified: a selector that doesn't exist produces a `"failed"` job with the real error code instead of crashing anything; an invalid request body with `async: true` still gets a synchronous `400` with no job created at all; and an async job goes through the same cache as a synchronous request (a cached async job's second run reports `metadata.cached: true` too), since both paths call the same extracted `executeScrape()`.
 
 This will become especially useful if you later scrape multiple websites simultaneously.
 
@@ -1651,7 +1703,8 @@ scraper-system/
 │   ├── api/
 │   │   ├── routes/
 │   │   │   ├── scrape.ts
-│   │   │   └── websites.ts             (Phase 8: GET/POST/PUT/DELETE /websites)
+│   │   │   ├── websites.ts             (Phase 8: GET/POST/PUT/DELETE /websites)
+│   │   │   └── jobs.ts                 (Phase 11: GET /jobs/:id)
 │   │   │
 │   │   └── schemas/
 │   │       ├── scrape.schema.ts
@@ -1671,6 +1724,15 @@ scraper-system/
 │   │   ├── auth/
 │   │   │   └── adminAuth.ts            (ADMIN_API_KEY preHandler for write routes)
 │   │   │
+│   │   ├── cache/
+│   │   │   ├── Cache.ts                (interface)
+│   │   │   ├── InMemoryCache.ts        (Phase 10 — TTL + FIFO cap, single-process)
+│   │   │   ├── cacheKey.ts             (stable hash of a request's cacheable identity)
+│   │   │   └── withCache.ts            (check → compute-on-miss → store, used by scrapeExecutor.ts)
+│   │   │
+│   │   ├── jobs/
+│   │   │   └── JobStore.ts             (Phase 11 — in-memory job status: queued/running/completed/failed)
+│   │   │
 │   │   ├── errors/
 │   │   │   ├── ScraperError.ts         (typed error + error codes)
 │   │   │   └── errorHandler.ts         (Fastify setErrorHandler — code → HTTP status)
@@ -1682,8 +1744,10 @@ scraper-system/
 │   │   ├── pagination/
 │   │   │   └── PaginationEngine.ts     (multi-page loop, safeguards, stopReason)
 │   │   │
-│   │   └── security/
-│   │       └── UrlPolicy.ts            (protocol + private-IP/SSRF allowlist; returns resolved IP)
+│   │   ├── security/
+│   │   │   └── UrlPolicy.ts            (protocol + private-IP/SSRF allowlist; returns resolved IP)
+│   │   │
+│   │   └── scrapeExecutor.ts           (the actual "do this scrape" logic; shared by sync and async /scrape)
 │   │
 │   ├── strategies/
 │   │   ├── ScrapingStrategy.ts
@@ -1729,7 +1793,7 @@ scraper-system/
 │   │   └── configRepository.contract.ts (shared CRUD contract; run against any ConfigRepository)
 │   ├── fixtures/                       (saved HTML — no test depends on a live site)
 │   ├── setup.ts
-│   └── *.test.ts                       (93 tests across 11 files)
+│   └── *.test.ts                       (118 tests across 15 files)
 │
 ├── package.json
 ├── tsconfig.json
@@ -1869,10 +1933,10 @@ Follow this exact order.
 ## Milestone 11
 
 ```text
-[ ] Cache
-[ ] Jobs
-[ ] Queue
-[ ] Workers
+[x] Cache
+[x] Jobs        (Phase 11)
+[ ] Queue       (Phase 12)
+[ ] Workers     (Phase 12)
 ```
 
 ---
@@ -1933,6 +1997,7 @@ POST /scrape
     "metadata": {
         "durationMs": 216,
         "items": 1,
+        "cached": false,
         "pages": 1,
         "stopReason": "lastPage",
         "truncated": false,
@@ -2067,7 +2132,7 @@ Also respect the target site's terms, robots policies where applicable, copyrigh
 
 # 30. Current Status and What's Actually Next
 
-Phases 1–9 are complete and tested (see each phase's own "Status" line above, and `tests/`). That original three-step arc this section used to describe —
+Phases 1–11 are complete and tested (see each phase's own "Status" line above, and `tests/`). That original three-step arc this section used to describe —
 
 ```text
 POST /scrape → validate → fetch → parse → extract page title
@@ -2077,13 +2142,11 @@ POST /scrape → validate → fetch → parse → extract page title
                 JSON configuration → Scraper Engine → Extractor → Transformers → JSON
 ```
 
-— is exactly what exists today, plus pagination, dynamic (Playwright) sites, standard error codes, a security-hardening pass (SSRF/private-network blocking, timeouts, redirect limits, browser reuse) that came out of an audit rather than a planned phase, a website management API with authenticated writes, and an optional SQLite storage backend behind the same repository interface as the JSON files.
+— is exactly what exists today, plus pagination, dynamic (Playwright) sites, standard error codes, a security-hardening pass (SSRF/private-network blocking, timeouts, redirect limits, browser reuse) that came out of an audit rather than a planned phase, a website management API with authenticated writes, an optional SQLite storage backend behind the same repository interface as the JSON files, an in-memory TTL cache so repeated identical requests don't re-scrape the same page, and opt-in async jobs (`"async": true` + `GET /jobs/:id`) so a slow browser-mode scrape doesn't block the caller.
 
-Genuinely next, in order, per the phase list in Section 4 (Phases 8–9 are now also done — see their sections above):
+Genuinely next, in order, per the phase list in Section 4 (Phases 8–11 are now also done — see their sections above):
 
 ```text
-Phase 10 → Caching
-Phase 11 → Scraping jobs (async, for slow browser-mode scrapes)
 Phase 12 → Queue system (BullMQ + Redis, only once jobs exist)
 Phase 13 → Unity client
 Phase 14 → Admin UI

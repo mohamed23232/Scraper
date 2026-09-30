@@ -50,6 +50,10 @@ DELETE /websites/:id         remove                }
 
 Every response is `{ success, url?, data?, metadata? }` on success or `{ success: false, error: { code, message } }` on failure — see §22 of the roadmap doc for the full error code list.
 
+Add `"cache": { "enabled": true, "ttl": 300 }` to any request (or to a saved website config) to cache its result in memory for that many seconds — repeat identical requests return instantly with `metadata.cached: true` instead of re-scraping.
+
+Add `"async": true` to any request to get an instant `202 { jobId, status: "queued" }` instead of waiting — useful for slow `scraper.type: "browser"` scrapes. Poll `GET /jobs/:jobId` until `status` is `"completed"` (with `result`) or `"failed"` (with `error`).
+
 ## Website config storage
 
 Saved configs live as `configs/websites/<id>.json` files by default. To use a local SQLite database instead:

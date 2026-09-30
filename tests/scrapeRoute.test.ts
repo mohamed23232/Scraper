@@ -137,17 +137,20 @@ describe("B6: request modes", () => {
 describe("B6: ALLOW_INLINE_CONFIGS gating", () => {
 
     let server: TestServer;
+    let configsDir: string;
     let testApp: TestApp;
 
     beforeAll(async () => {
         server = await startFixtureServer(path.join(FIXTURES, "simple"));
-        testApp = await buildTestApp();
+        configsDir = await mkdtemp(path.join(tmpdir(), "scraper-configs-gating-"));
+        testApp = await buildTestApp(configsDir);
     });
 
     afterAll(async () => {
         await testApp.app.close();
         await testApp.browserStrategy.close();
         await server.close();
+        await rm(configsDir, { recursive: true, force: true });
         delete process.env["ALLOW_INLINE_CONFIGS"];
     });
 

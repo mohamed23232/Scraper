@@ -3,18 +3,47 @@ import { scrapeRequestSchema } from "../schemas/scrape.schema.js";
 import { ScraperEngine } from "../../core/scraper/ScraperEngine.js";
 import { ExtractionEngine } from "../../extractors/ExtractionEngine.js";
 import type { ConfigRepository } from "../../core/config/ConfigRepository.js";
-import { PaginationEngine, type PaginationResult } from "../../core/pagination/PaginationEngine.js";
-import { TransformPipeline } from "../../transforms/TransformPipeline.js";
+import { PaginationEngine } from "../../core/pagination/PaginationEngine.js";
 import { ScraperError } from "../../core/errors/ScraperError.js";
-import { isInlineConfigsAllowed } from "../../core/config/featureFlags.js";
+import type { Cache } from "../../core/cache/Cache.js";
+import { executeScrape, type ScrapeExecutionResult } from "../../core/scrapeExecutor.js";
+import { JobStore } from "../../core/jobs/JobStore.js";
+
+function buildResponseBody(execResult: ScrapeExecutionResult, durationMs: number) {
+
+    const { targetUrl, data, pagination, cached } = execResult;
+
+    return {
+        success: true,
+        url: targetUrl,
+        data,
+        metadata: {
+            durationMs,
+            items: Array.isArray(data) ? data.length : undefined,
+            cached,
+            ...(pagination
+                ? {
+                    pages: pagination.pages,
+                    stopReason: pagination.stopReason,
+                    truncated: pagination.truncated,
+                    warnings: pagination.warnings
+                }
+                : {})
+        }
+    };
+}
 
 export async function scrapeRoute(
     app: FastifyInstance,
     scraperEngine: ScraperEngine,
     extractionEngine: ExtractionEngine,
     configLoader: ConfigRepository,
-    paginationEngine: PaginationEngine
+    paginationEngine: PaginationEngine,
+    cache: Cache,
+    jobStore: JobStore
 ) {
+    const deps = { scraperEngine, extractionEngine, configLoader, paginationEngine, cache };
+
     app.post("/scrape", async (request, reply) => {
 
         const startedAt = Date.now();
@@ -27,105 +56,33 @@ export async function scrapeRoute(
 
         const body = result.data;
 
-        let data: unknown;
-        let pagination: PaginationResult | undefined;
-        let targetUrl: string;
+        if (body.async) {
 
-        if ("config" in body) {
+            const job = jobStore.create();
 
-            if (!isInlineConfigsAllowed()) {
-                throw new ScraperError(
-                    "INVALID_CONFIGURATION",
-                    "Inline 'config' requests are disabled on this server; use a saved website configuration (the 'website' field) instead."
-                );
-            }
+            void (async () => {
 
-            targetUrl = body.url;
+                jobStore.markRunning(job.id);
 
-            pagination = await paginationEngine.scrapeAllPages(
-                targetUrl,
-                body.config.item.selector,
-                body.config.fields,
-                body.scraper,
-                body.config.pagination,
-                { allowEmpty: body.config.item.allowEmpty }
-            );
-
-            data = pagination.items;
-
-        } else if ("website" in body) {
-
-            const config = await configLoader.load(body.website);
-
-            if (body.url) {
-
-                const requestHost = new URL(body.url).hostname;
-                const configHost = new URL(config.startUrl).hostname;
-
-                if (requestHost !== configHost) {
-                    throw new ScraperError(
-                        "INVALID_CONFIGURATION",
-                        `Request url host '${requestHost}' does not match configuration '${body.website}' host '${configHost}'`
-                    );
+                try {
+                    const execResult = await executeScrape(body, deps);
+                    const response = buildResponseBody(execResult, Date.now() - startedAt);
+                    jobStore.complete(job.id, { url: response.url, data: response.data, metadata: response.metadata });
+                } catch (error) {
+                    if (error instanceof ScraperError) {
+                        jobStore.fail(job.id, { code: error.code, message: error.message });
+                    } else {
+                        app.log.error(error);
+                        jobStore.fail(job.id, { code: "INTERNAL_ERROR", message: "An unexpected error occurred" });
+                    }
                 }
+            })();
 
-                targetUrl = body.url;
-
-            } else {
-                targetUrl = config.startUrl;
-            }
-
-            pagination = await paginationEngine.scrapeAllPages(
-                targetUrl,
-                config.item.selector,
-                config.fields,
-                config.scraper,
-                config.pagination,
-                { allowEmpty: config.item.allowEmpty }
-            );
-
-            data = pagination.items;
-
-        } else {
-
-            if (!isInlineConfigsAllowed()) {
-                throw new ScraperError(
-                    "INVALID_CONFIGURATION",
-                    "Flat scrape requests are disabled on this server; use a saved website configuration (the 'website' field) instead."
-                );
-            }
-
-            targetUrl = body.url;
-
-            const page = await scraperEngine.scrape(targetUrl, body.scraper);
-
-            const values = extractionEngine.extract(page.$, {
-                selector: body.selector,
-                extract: body.extract,
-                attribute: body.attribute
-            });
-
-            data = values.map(
-                (value) => TransformPipeline.run(value, body.transform, { baseUrl: page.finalUrl })
-            );
+            return reply.status(202).send({ jobId: job.id, status: "queued" });
         }
 
-        return reply.status(200).send({
-            success: true,
-            url: targetUrl,
-            data,
-            metadata: {
-                durationMs: Date.now() - startedAt,
-                items: Array.isArray(data) ? data.length : undefined,
-                ...(pagination
-                    ? {
-                        pages: pagination.pages,
-                        stopReason: pagination.stopReason,
-                        truncated: pagination.truncated,
-                        warnings: pagination.warnings
-                    }
-                    : {})
-            }
-        });
+        const execResult = await executeScrape(body, deps);
+
+        return reply.status(200).send(buildResponseBody(execResult, Date.now() - startedAt));
     });
 }

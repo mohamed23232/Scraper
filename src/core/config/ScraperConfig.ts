@@ -46,6 +46,11 @@ export const scraperOptionsSchema = z.object({
     blockResources: z.boolean().optional()
 });
 
+export const cacheConfigSchema = z.object({
+    enabled: z.boolean(),
+    ttl: z.number().int().positive()
+});
+
 export const paginationConfigSchema = z.object({
     enabled: z.boolean(),
     nextSelector: z.string().min(1),
@@ -86,7 +91,9 @@ const rawScraperConfigSchema = z.object({
             { message: "fields must contain at least one field" }
         ),
 
-    pagination: paginationConfigSchema.optional()
+    pagination: paginationConfigSchema.optional(),
+
+    cache: cacheConfigSchema.optional()
 }).refine(
     (config) => !!(config.startUrl ?? config.website),
     { message: "startUrl is required (the 'website' field name is deprecated but still accepted)", path: ["startUrl"] }
@@ -111,4 +118,5 @@ export type FieldOutputType = z.infer<typeof fieldOutputTypeSchema>;
 export type FieldConfig = z.infer<typeof fieldConfigSchema>;
 export type ScraperOptionsConfig = z.infer<typeof scraperOptionsSchema>;
 export type PaginationConfig = z.infer<typeof paginationConfigSchema>;
+export type CacheConfig = z.infer<typeof cacheConfigSchema>;
 export type ScraperConfig = z.infer<typeof scraperConfigSchema>;
