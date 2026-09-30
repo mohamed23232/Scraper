@@ -8,7 +8,8 @@
     "start": "tsx src/index.ts",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "migrate:sqlite": "tsx src/scripts/migrateConfigsToSqlite.ts"
   },
   "keywords": [],
   "author": "",

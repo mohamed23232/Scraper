@@ -49,3 +49,14 @@ DELETE /websites/:id         remove                }
 ```
 
 Every response is `{ success, url?, data?, metadata? }` on success or `{ success: false, error: { code, message } }` on failure — see §22 of the roadmap doc for the full error code list.
+
+## Website config storage
+
+Saved configs live as `configs/websites/<id>.json` files by default. To use a local SQLite database instead:
+
+```bash
+npm run migrate:sqlite         # one-time: imports existing *.json configs into data/configs.sqlite
+CONFIG_STORAGE=sqlite npm run dev
+```
+
+Both backends implement the same `ConfigRepository` interface and are interchangeable — `/scrape` and `/websites` behave identically either way.

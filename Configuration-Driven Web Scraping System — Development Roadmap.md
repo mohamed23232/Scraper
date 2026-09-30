@@ -1255,7 +1255,7 @@ A follow-up review specifically of Phase 8's write endpoints found they had **no
 - A field with `required: false` (so its value can genuinely be `null`) and a `transform: [{"name": "default", ...}]` now actually works — `default` is specifically designed to turn `null` into a fallback, but it was previously never given the chance to run at all, since the whole transform pipeline was skipped outright whenever the input was `null`. Every other transform still passes `null` straight through unchanged (not their job to handle a missing value) — `default` is the one exception.
 - **`CONFIGS_DIR`** (env var, default `configs/websites`) — where website config files live. `FileConfigRepository.save()` also writes atomically now (temp file + rename) so `/scrape` can never read a half-written file mid-save.
 - **Known limitation, not fixed**: DNS-rebinding in *browser* mode. Static mode now resolves a hostname once, validates that IP, and pins the actual connection to it (via a custom undici dispatcher) so a second, different DNS answer at connect time can't smuggle a private address past the check. Browser mode has no equivalent — Playwright/Chromium does its own internal DNS resolution that isn't interceptable the same way. Not exploited today (URLs are still checked before every navigation and every subresource request), but a sufficiently well-timed DNS response change between the check and Chromium's own connection remains a theoretical gap in browser mode specifically.
-- `ConfigLoader` was extracted into a `ConfigRepository` interface, implemented by `FileConfigRepository` — `scrape.ts`/`websites.ts` depend only on the interface. This is groundwork for Phase 9: a future `DatabaseConfigRepository` can implement the same interface, and the CRUD contract tests (`tests/helpers/configRepository.contract.ts`) already run against any implementation via a factory function, so Phase 9 only needs to add one new test file, not rewrite the test suite.
+- `ConfigLoader` was extracted into a `ConfigRepository` interface, implemented by `FileConfigRepository` — `scrape.ts`/`websites.ts` depend only on the interface. This was groundwork for Phase 9, which paid off exactly as planned: `SqliteConfigRepository` implements the same interface, and the CRUD contract tests (`tests/helpers/configRepository.contract.ts`) needed only one new test file (`tests/sqliteConfigRepository.test.ts`, supplying a different factory) to run the identical suite against it — no changes to the contract tests themselves, and no changes to `scrape.ts`/`websites.ts` at all.
 
 ---
 
@@ -1346,36 +1346,44 @@ This is much cleaner for Unity.
 
 # Phase 9 — Database
 
-Once the configuration system is stable, move configurations from JSON files to a database.
+**Status: Complete**, as an opt-in alternative to JSON files — not a forced migration. The original plan's two-table split (`Website` + `ScraperConfig` with a foreign key) was simplified to one table, since here a config's identity *is* the website: there's no scenario in this system where one website has several configs or a config exists independent of a website.
 
-Possible structure:
-
-```text
-Website
-----------------
-id
-name
-baseUrl
-enabled
-createdAt
-updatedAt
-```
+Implemented in:
 
 ```text
-ScraperConfig
-----------------
-id
-websiteId
-config
-version
-enabled
-createdAt
-updatedAt
+src/
+├── core/
+│   └── config/
+│       └── SqliteConfigRepository.ts   (implements the same ConfigRepository interface as the file backend)
+└── scripts/
+    └── migrateConfigsToSqlite.ts       (one-time import of existing *.json configs)
 ```
 
-You can initially keep configurations as JSON.
+Storage is chosen by env var — `CONFIG_STORAGE=file` (default) or `CONFIG_STORAGE=sqlite` (+ optional `DATABASE_PATH`, default `data/configs.sqlite`). Both implementations satisfy the exact same `ConfigRepository` interface (`load`/`list`/`exists`/`save`/`remove`) that the Phase 8 hardening pass deliberately extracted for this — `scrape.ts` and `websites.ts` don't know or care which backend is behind it, and the shared CRUD contract test suite (`tests/helpers/configRepository.contract.ts`) runs identically against both, catching any behavioral drift between them automatically.
 
-Do **not** add a database before the scraping engine works.
+Built on Node's own built-in `node:sqlite` (no new dependency) rather than an external database or ORM — appropriate for a single-process local backend; still marked experimental by Node itself, hence the one-time `ExperimentalWarning` at startup when this mode is used (the import is deferred so file-mode users never see it).
+
+Table:
+
+```text
+website_configs
+----------------
+id            TEXT PRIMARY KEY
+name          TEXT
+start_url     TEXT
+config_json   TEXT   -- the full validated ScraperConfig, as JSON
+version       INTEGER  -- incremented on every save()
+created_at    TEXT
+updated_at    TEXT
+```
+
+`id`/`name`/`start_url` are pulled out as real columns so `list()` doesn't need to parse every row's JSON; `config_json` is the source of truth, re-validated against `scraperConfigSchema` on every `load()` exactly like a file is (so a hand-edited or corrupted row fails the same way a corrupted file would, rather than crashing).
+
+**`version` is tracked but not yet a feature** — Milestone 10's "Configuration versions" is only half done: every `save()` bumps the counter, but there's no API to list, view, or roll back to a previous version. That's the honest remaining gap, deliberately not built now (no client needs it yet, and a real version-history API is its own design question — retention limits, diffing, who can roll back).
+
+**Verified live**: ran `npm run migrate:sqlite` against the two real shipped configs, then started the server in `CONFIG_STORAGE=sqlite` mode and confirmed `GET /websites`, `/scrape` in website mode, and the full `POST`/`DELETE /websites` cycle all behave identically to file mode — a transparent swap.
+
+You can keep configurations as JSON indefinitely; nothing requires switching.
 
 ---
 
@@ -1656,7 +1664,8 @@ scraper-system/
 │   │   ├── config/
 │   │   │   ├── ScraperConfig.ts        (Zod schemas — field/scraper/pagination/site config)
 │   │   │   ├── ConfigRepository.ts     (interface: load/list/exists/save/remove)
-│   │   │   ├── FileConfigRepository.ts (implementation — CONFIGS_DIR/<id>.json, atomic writes)
+│   │   │   ├── FileConfigRepository.ts (CONFIGS_DIR/<id>.json, atomic writes)
+│   │   │   ├── SqliteConfigRepository.ts (Phase 9 — node:sqlite, opt-in via CONFIG_STORAGE=sqlite)
 │   │   │   └── featureFlags.ts         (ALLOW_INLINE_CONFIGS)
 │   │   │
 │   │   ├── auth/
@@ -1700,12 +1709,18 @@ scraper-system/
 │   │   ├── ReplaceTransform.ts
 │   │   └── DefaultTransform.ts
 │   │
+│   ├── scripts/
+│   │   └── migrateConfigsToSqlite.ts   (one-time: imports configs/websites/*.json into sqlite)
+│   │
 │   └── index.ts
 │
 ├── configs/
 │   └── websites/
 │       ├── example.json
 │       └── wikipedia.json
+│
+├── data/                               (CONFIG_STORAGE=sqlite only; gitignored)
+│   └── configs.sqlite
 │
 ├── tests/
 │   ├── helpers/
@@ -1714,7 +1729,7 @@ scraper-system/
 │   │   └── configRepository.contract.ts (shared CRUD contract; run against any ConfigRepository)
 │   ├── fixtures/                       (saved HTML — no test depends on a live site)
 │   ├── setup.ts
-│   └── *.test.ts                       (86 tests across 10 files)
+│   └── *.test.ts                       (93 tests across 11 files)
 │
 ├── package.json
 ├── tsconfig.json
@@ -1844,9 +1859,9 @@ Follow this exact order.
 ## Milestone 10
 
 ```text
-[ ] Database
-[ ] Configuration persistence
-[ ] Configuration versions
+[x] Database
+[x] Configuration persistence
+[~] Configuration versions   (tracked internally on every save; no history/rollback API yet)
 ```
 
 ---
@@ -2052,7 +2067,7 @@ Also respect the target site's terms, robots policies where applicable, copyrigh
 
 # 30. Current Status and What's Actually Next
 
-Phases 1–8 are complete and tested (see each phase's own "Status" line above, and `tests/`). That original three-step arc this section used to describe —
+Phases 1–9 are complete and tested (see each phase's own "Status" line above, and `tests/`). That original three-step arc this section used to describe —
 
 ```text
 POST /scrape → validate → fetch → parse → extract page title
@@ -2062,12 +2077,11 @@ POST /scrape → validate → fetch → parse → extract page title
                 JSON configuration → Scraper Engine → Extractor → Transformers → JSON
 ```
 
-— is exactly what exists today, plus pagination, dynamic (Playwright) sites, standard error codes, and a security-hardening pass (SSRF/private-network blocking, timeouts, redirect limits, browser reuse) that came out of an audit rather than a planned phase.
+— is exactly what exists today, plus pagination, dynamic (Playwright) sites, standard error codes, a security-hardening pass (SSRF/private-network blocking, timeouts, redirect limits, browser reuse) that came out of an audit rather than a planned phase, a website management API with authenticated writes, and an optional SQLite storage backend behind the same repository interface as the JSON files.
 
-Genuinely next, in order, per the phase list in Section 4 (Phase 8 is now also done — see its section above):
+Genuinely next, in order, per the phase list in Section 4 (Phases 8–9 are now also done — see their sections above):
 
 ```text
-Phase 9  → Database (move configs off the filesystem)
 Phase 10 → Caching
 Phase 11 → Scraping jobs (async, for slow browser-mode scrapes)
 Phase 12 → Queue system (BullMQ + Redis, only once jobs exist)
@@ -2075,4 +2089,4 @@ Phase 13 → Unity client
 Phase 14 → Admin UI
 ```
 
-Also still open, noted but deliberately deferred during the audits (see each phase's notes above for why): nested objects/sub-items in extraction, `pagination.mode: "click"` / `"urlPattern"` for pagination that isn't link-based, rate limiting, and DNS-rebinding protection in browser mode specifically (§29).
+Also still open, noted but deliberately deferred (see each phase's notes above for why): nested objects/sub-items in extraction, `pagination.mode: "click"` / `"urlPattern"` for pagination that isn't link-based, rate limiting, DNS-rebinding protection in browser mode specifically (§29), and a configuration version-history/rollback API (Phase 9 tracks a version number on every save, but nothing reads it back yet).

@@ -32,3 +32,8 @@ blob-report/
 # Temporary files
 tmp/
 temp/
+
+# Local SQLite database (Phase 9 — CONFIG_STORAGE=sqlite)
+data/
+*.sqlite
+*.sqlite-journal
