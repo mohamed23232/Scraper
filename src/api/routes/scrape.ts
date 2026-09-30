@@ -6,32 +6,8 @@ import type { ConfigRepository } from "../../core/config/ConfigRepository.js";
 import { PaginationEngine } from "../../core/pagination/PaginationEngine.js";
 import { ScraperError } from "../../core/errors/ScraperError.js";
 import type { Cache } from "../../core/cache/Cache.js";
-import { executeScrape, type ScrapeExecutionResult } from "../../core/scrapeExecutor.js";
-import { JobStore } from "../../core/jobs/JobStore.js";
-
-function buildResponseBody(execResult: ScrapeExecutionResult, durationMs: number) {
-
-    const { targetUrl, data, pagination, cached } = execResult;
-
-    return {
-        success: true,
-        url: targetUrl,
-        data,
-        metadata: {
-            durationMs,
-            items: Array.isArray(data) ? data.length : undefined,
-            cached,
-            ...(pagination
-                ? {
-                    pages: pagination.pages,
-                    stopReason: pagination.stopReason,
-                    truncated: pagination.truncated,
-                    warnings: pagination.warnings
-                }
-                : {})
-        }
-    };
-}
+import { executeScrape, buildScrapeResponseData } from "../../core/scrapeExecutor.js";
+import type { JobQueue } from "../../core/jobs/JobQueue.js";
 
 export async function scrapeRoute(
     app: FastifyInstance,
@@ -40,7 +16,7 @@ export async function scrapeRoute(
     configLoader: ConfigRepository,
     paginationEngine: PaginationEngine,
     cache: Cache,
-    jobStore: JobStore
+    jobQueue: JobQueue
 ) {
     const deps = { scraperEngine, extractionEngine, configLoader, paginationEngine, cache };
 
@@ -57,32 +33,15 @@ export async function scrapeRoute(
         const body = result.data;
 
         if (body.async) {
-
-            const job = jobStore.create();
-
-            void (async () => {
-
-                jobStore.markRunning(job.id);
-
-                try {
-                    const execResult = await executeScrape(body, deps);
-                    const response = buildResponseBody(execResult, Date.now() - startedAt);
-                    jobStore.complete(job.id, { url: response.url, data: response.data, metadata: response.metadata });
-                } catch (error) {
-                    if (error instanceof ScraperError) {
-                        jobStore.fail(job.id, { code: error.code, message: error.message });
-                    } else {
-                        app.log.error(error);
-                        jobStore.fail(job.id, { code: "INTERNAL_ERROR", message: "An unexpected error occurred" });
-                    }
-                }
-            })();
-
-            return reply.status(202).send({ jobId: job.id, status: "queued" });
+            const jobId = await jobQueue.enqueue(body);
+            return reply.status(202).send({ jobId, status: "queued" });
         }
 
         const execResult = await executeScrape(body, deps);
 
-        return reply.status(200).send(buildResponseBody(execResult, Date.now() - startedAt));
+        return reply.status(200).send({
+            success: true,
+            ...buildScrapeResponseData(execResult, Date.now() - startedAt)
+        });
     });
 }

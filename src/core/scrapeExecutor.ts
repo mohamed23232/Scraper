@@ -22,6 +22,29 @@ export interface ScrapeExecutionResult extends CacheableResult {
     cached: boolean;
 }
 
+export function buildScrapeResponseData(execResult: ScrapeExecutionResult, durationMs: number) {
+
+    const { targetUrl, data, pagination, cached } = execResult;
+
+    return {
+        url: targetUrl,
+        data,
+        metadata: {
+            durationMs,
+            items: Array.isArray(data) ? data.length : undefined,
+            cached,
+            ...(pagination
+                ? {
+                    pages: pagination.pages,
+                    stopReason: pagination.stopReason,
+                    truncated: pagination.truncated,
+                    warnings: pagination.warnings
+                }
+                : {})
+        }
+    };
+}
+
 export async function executeScrape(
     body: ScrapeRequest,
     deps: ScrapeExecutorDeps

@@ -64,3 +64,15 @@ CONFIG_STORAGE=sqlite npm run dev
 ```
 
 Both backends implement the same `ConfigRepository` interface and are interchangeable — `/scrape` and `/websites` behave identically either way.
+
+## Scaling async jobs with a real queue
+
+By default, `"async": true` jobs run in-process (no setup needed). To hand them off to a real Redis-backed queue processed by separate worker process(es) instead:
+
+```bash
+# needs a running Redis — REDIS_URL defaults to redis://127.0.0.1:6379
+QUEUE_DRIVER=bullmq npm run dev      # API process — only enqueues jobs now
+QUEUE_DRIVER=bullmq npm run worker   # a separate process that actually runs them; start more than one to scale out
+```
+
+Both processes must point at the same `REDIS_URL`. Without at least one worker running, jobs queue but never complete.

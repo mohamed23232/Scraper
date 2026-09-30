@@ -1,32 +1,24 @@
 import Fastify from "fastify";
-import path from "node:path";
 
 import { HttpClient } from "./core/http/HttpClient.js";
 import { ScraperEngine } from "./core/scraper/ScraperEngine.js";
 import { StaticStrategy } from "./strategies/StaticStrategy.js";
 import { BrowserStrategy } from "./strategies/BrowserStrategy.js";
 import { ExtractionEngine } from "./extractors/ExtractionEngine.js";
-import type { ConfigRepository } from "./core/config/ConfigRepository.js";
-import { FileConfigRepository } from "./core/config/FileConfigRepository.js";
+import { buildConfigRepository } from "./core/config/buildConfigRepository.js";
 import { SqliteConfigRepository } from "./core/config/SqliteConfigRepository.js";
 import { PaginationEngine } from "./core/pagination/PaginationEngine.js";
 import { InMemoryCache } from "./core/cache/InMemoryCache.js";
+import type { JobQueue } from "./core/jobs/JobQueue.js";
 import { JobStore } from "./core/jobs/JobStore.js";
+import { InMemoryJobQueue } from "./core/jobs/InMemoryJobQueue.js";
+import { BullMqJobQueue } from "./core/jobs/BullMqJobQueue.js";
+import { getQueueDriver, createRedisConnection } from "./core/jobs/queueConfig.js";
 import { registerErrorHandler } from "./core/errors/errorHandler.js";
 import { adminAuthWarningIfAny } from "./core/auth/adminAuth.js";
 import { scrapeRoute } from "./api/routes/scrape.js";
 import { websitesRoute } from "./api/routes/websites.js";
 import { jobsRoute } from "./api/routes/jobs.js";
-
-function buildConfigRepository(): ConfigRepository {
-
-    if (process.env["CONFIG_STORAGE"] === "sqlite") {
-        const dbPath = process.env["DATABASE_PATH"] ?? path.resolve(process.cwd(), "data", "configs.sqlite");
-        return new SqliteConfigRepository(dbPath);
-    }
-
-    return new FileConfigRepository(process.env["CONFIGS_DIR"]);
-}
 
 const app = Fastify({
     logger: true
@@ -49,17 +41,30 @@ const extractionEngine = new ExtractionEngine();
 const configLoader = buildConfigRepository();
 const paginationEngine = new PaginationEngine(scraperEngine, extractionEngine);
 const cache = new InMemoryCache();
-const jobStore = new JobStore();
+
+const scrapeDeps = { scraperEngine, extractionEngine, configLoader, paginationEngine, cache };
+
+const jobQueue: JobQueue = getQueueDriver() === "bullmq"
+    ? new BullMqJobQueue(createRedisConnection())
+    : new InMemoryJobQueue(new JobStore(), scrapeDeps);
+
+if (getQueueDriver() === "bullmq") {
+    app.log.warn(
+        "QUEUE_DRIVER=bullmq: this API process only enqueues jobs. Run 'npm run worker' " +
+        "(pointed at the same REDIS_URL) in a separate process, or async jobs will queue forever."
+    );
+}
 
 // Routes
 app.register(async (app) => {
-    await scrapeRoute(app, scraperEngine, extractionEngine, configLoader, paginationEngine, cache, jobStore);
+    await scrapeRoute(app, scraperEngine, extractionEngine, configLoader, paginationEngine, cache, jobQueue);
     await websitesRoute(app, configLoader);
-    await jobsRoute(app, jobStore);
+    await jobsRoute(app, jobQueue);
 });
 
 app.addHook("onClose", async () => {
     await browserStrategy.close();
+    await jobQueue.close();
     if (configLoader instanceof SqliteConfigRepository) {
         await configLoader.close();
     }

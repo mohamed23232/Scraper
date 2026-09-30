@@ -8,7 +8,9 @@ import { FileConfigRepository } from "../../src/core/config/FileConfigRepository
 import type { ConfigRepository } from "../../src/core/config/ConfigRepository.js";
 import { PaginationEngine } from "../../src/core/pagination/PaginationEngine.js";
 import { InMemoryCache } from "../../src/core/cache/InMemoryCache.js";
+import type { JobQueue } from "../../src/core/jobs/JobQueue.js";
 import { JobStore } from "../../src/core/jobs/JobStore.js";
+import { InMemoryJobQueue } from "../../src/core/jobs/InMemoryJobQueue.js";
 import { registerErrorHandler } from "../../src/core/errors/errorHandler.js";
 import { scrapeRoute } from "../../src/api/routes/scrape.js";
 import { websitesRoute } from "../../src/api/routes/websites.js";
@@ -19,10 +21,10 @@ export interface TestApp {
     browserStrategy: BrowserStrategy;
     configLoader: ConfigRepository;
     cache: InMemoryCache;
-    jobStore: JobStore;
+    jobQueue: JobQueue;
 }
 
-export async function buildTestApp(configsDir?: string): Promise<TestApp> {
+export async function buildTestApp(configsDir?: string, jobQueueOverride?: JobQueue): Promise<TestApp> {
 
     const app = Fastify({ logger: false });
     registerErrorHandler(app);
@@ -35,15 +37,17 @@ export async function buildTestApp(configsDir?: string): Promise<TestApp> {
     const configLoader = new FileConfigRepository(configsDir);
     const paginationEngine = new PaginationEngine(scraperEngine, extractionEngine);
     const cache = new InMemoryCache();
-    const jobStore = new JobStore();
+
+    const scrapeDeps = { scraperEngine, extractionEngine, configLoader, paginationEngine, cache };
+    const jobQueue = jobQueueOverride ?? new InMemoryJobQueue(new JobStore(), scrapeDeps);
 
     await app.register(async (instance) => {
-        await scrapeRoute(instance, scraperEngine, extractionEngine, configLoader, paginationEngine, cache, jobStore);
+        await scrapeRoute(instance, scraperEngine, extractionEngine, configLoader, paginationEngine, cache, jobQueue);
         await websitesRoute(instance, configLoader);
-        await jobsRoute(instance, jobStore);
+        await jobsRoute(instance, jobQueue);
     });
 
     await app.ready();
 
-    return { app, browserStrategy, configLoader, cache, jobStore };
+    return { app, browserStrategy, configLoader, cache, jobQueue };
 }

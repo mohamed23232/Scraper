@@ -1256,6 +1256,7 @@ Accepted on all three request shapes (flat, inline `config`, and a saved `websit
 - **`ALLOW_INLINE_CONFIGS`** (env var; default: `true` unless `NODE_ENV=production`) — when `false`, flat and inline-`config` requests are rejected; only `website`-id requests (against saved, reviewed configs) are served. Meant for a production deployment that only wants to expose pre-approved scrapes.
 - **`ALLOW_PRIVATE_NETWORKS`** (env var; default `false`) — must stay `false`/unset anywhere this API is actually reachable; see §29.
 - **`async`** (Phase 11, top-level, all three shapes) — `true` returns `202 { jobId, status: "queued" }` immediately instead of waiting for the scrape; poll `GET /jobs/:id` for the result. Request validation still happens synchronously either way — a malformed request is a `400` with no job ever created, `async` only defers the actual scraping work.
+- **`QUEUE_DRIVER`** (env var; default `memory`) — Phase 12. `memory` runs async jobs in-process, exactly as Phase 11 always did. `bullmq` switches to a real Redis-backed queue: the API process only enqueues, and a separate `npm run worker` process (or several, for real horizontal scale-out) actually executes them. Requires `REDIS_URL` (default `redis://127.0.0.1:6379`) and a running Redis, pointed at identically by both the API and every worker.
 
 ## Phase 8 hardening (a second audit, after `/websites` shipped)
 
@@ -1535,6 +1536,8 @@ This will become especially useful if you later scrape multiple websites simulta
 
 # Phase 12 — Queue System
 
+**Status: Complete**, as an opt-in alternative to Phase 11's in-process jobs — not a forced migration. ("Do not add it yet" below was written for a much earlier point in the project, before Phases 1–11 existed to justify it — the same conditional framing Phase 9's "do not add a database before the scraping engine works" used, and by this point the condition is satisfied.)
+
 When scraping becomes larger:
 
 ```text
@@ -1567,7 +1570,30 @@ For example:
 
 A queue system such as BullMQ + Redis can be added at this stage.
 
-Do not add it yet.
+Implemented in:
+
+```text
+src/
+├── core/
+│   └── jobs/
+│       ├── JobQueue.ts         (interface: enqueue/getStatus/close — same pattern as ConfigRepository)
+│       ├── InMemoryJobQueue.ts (Phase 11's behavior, now just one JobQueue implementation)
+│       ├── BullMqJobQueue.ts   (real Redis-backed queue; enqueues only, no worker)
+│       └── queueConfig.ts      (QUEUE_DRIVER / REDIS_URL, shared by the API and the worker script)
+└── scripts/
+    └── worker.ts               (a standalone process — no HTTP server — that pulls jobs and runs them)
+```
+
+`QUEUE_DRIVER=memory` (default) is exactly Phase 11, unchanged — nothing about it needed to move for this phase to exist, since `InMemoryJobQueue` is just `JobStore` + `executeScrape` wrapped behind the new `JobQueue` interface. `QUEUE_DRIVER=bullmq` switches the **API process** to only enqueue (`Queue.add()`) and never execute anything itself; one or more separate `npm run worker` processes (pointed at the same `REDIS_URL`) each run a BullMQ `Worker` that pulls jobs and calls the exact same `executeScrape()` the synchronous path and Phase 11 both already used — no scraping logic was duplicated or forked for this.
+
+`GET /jobs/:id` doesn't change at all between drivers — it calls `jobQueue.getStatus(id)`, and `BullMqJobQueue` maps BullMQ's own job states (`waiting`/`delayed`/… → `"queued"`, `active` → `"running"`, `completed`/`failed` unchanged) onto the same `{status, result, error}` shape `InMemoryJobQueue` already produced.
+
+**Verified against a real, standalone Redis** (embedded via `redis-memory-server` for a fully offline, no-Docker-required test — same technique used to prove this works before writing a line of production code) **and two genuinely separate OS processes** — not simulated:
+- Started the API (`QUEUE_DRIVER=bullmq`) with **no worker running**: an async job correctly stayed `"queued"` indefinitely.
+- Started `npm run worker` as its own process: the already-queued job was picked up and completed within moments — proving the API and worker only ever communicated through Redis, not shared memory.
+- Started a **second** worker process simultaneously and fired off four jobs at once: they were distributed across both workers (confirmed via each worker's own log), exactly the "Worker 1 / Worker 2 / Worker 3" scale-out picture above.
+
+**Known limitation, disclosed rather than hidden**: the cache (Phase 10) is still per-process. In `bullmq` mode, the worker process(es) that actually execute scrapes have their own cache, separate from the API process's (which doesn't scrape in this mode) and from each other — so two different workers won't share a cache hit for the same request. A properly shared cache would need to live in Redis too; worth doing if `bullmq` mode sees real use, out of scope for "wire up the queue" alone.
 
 ---
 
@@ -1719,6 +1745,7 @@ scraper-system/
 │   │   │   ├── ConfigRepository.ts     (interface: load/list/exists/save/remove)
 │   │   │   ├── FileConfigRepository.ts (CONFIGS_DIR/<id>.json, atomic writes)
 │   │   │   ├── SqliteConfigRepository.ts (Phase 9 — node:sqlite, opt-in via CONFIG_STORAGE=sqlite)
+│   │   │   ├── buildConfigRepository.ts (picks file vs. sqlite; shared by the API and the worker script)
 │   │   │   └── featureFlags.ts         (ALLOW_INLINE_CONFIGS)
 │   │   │
 │   │   ├── auth/
@@ -1731,7 +1758,11 @@ scraper-system/
 │   │   │   └── withCache.ts            (check → compute-on-miss → store, used by scrapeExecutor.ts)
 │   │   │
 │   │   ├── jobs/
-│   │   │   └── JobStore.ts             (Phase 11 — in-memory job status: queued/running/completed/failed)
+│   │   │   ├── JobStore.ts             (Phase 11 — in-memory job status: queued/running/completed/failed)
+│   │   │   ├── JobQueue.ts             (interface: enqueue/getStatus/close)
+│   │   │   ├── InMemoryJobQueue.ts     (Phase 12 — default driver, wraps JobStore + executeScrape)
+│   │   │   ├── BullMqJobQueue.ts       (Phase 12 — real Redis-backed queue; enqueues only, no worker)
+│   │   │   └── queueConfig.ts          (QUEUE_DRIVER / REDIS_URL, shared by the API and worker.ts)
 │   │   │
 │   │   ├── errors/
 │   │   │   ├── ScraperError.ts         (typed error + error codes)
@@ -1774,7 +1805,8 @@ scraper-system/
 │   │   └── DefaultTransform.ts
 │   │
 │   ├── scripts/
-│   │   └── migrateConfigsToSqlite.ts   (one-time: imports configs/websites/*.json into sqlite)
+│   │   ├── migrateConfigsToSqlite.ts   (one-time: imports configs/websites/*.json into sqlite)
+│   │   └── worker.ts                   (Phase 12 — standalone BullMQ worker process, no HTTP server)
 │   │
 │   └── index.ts
 │
@@ -1793,7 +1825,7 @@ scraper-system/
 │   │   └── configRepository.contract.ts (shared CRUD contract; run against any ConfigRepository)
 │   ├── fixtures/                       (saved HTML — no test depends on a live site)
 │   ├── setup.ts
-│   └── *.test.ts                       (118 tests across 15 files)
+│   └── *.test.ts                       (121 tests across 16 files — includes a real BullMQ+Redis test via an embedded, no-Docker Redis)
 │
 ├── package.json
 ├── tsconfig.json
@@ -1935,8 +1967,8 @@ Follow this exact order.
 ```text
 [x] Cache
 [x] Jobs        (Phase 11)
-[ ] Queue       (Phase 12)
-[ ] Workers     (Phase 12)
+[x] Queue       (Phase 12)
+[x] Workers     (Phase 12)
 ```
 
 ---
@@ -2132,7 +2164,7 @@ Also respect the target site's terms, robots policies where applicable, copyrigh
 
 # 30. Current Status and What's Actually Next
 
-Phases 1–11 are complete and tested (see each phase's own "Status" line above, and `tests/`). That original three-step arc this section used to describe —
+**Phases 1–12 are complete and tested** (see each phase's own "Status" line above, and `tests/`) — the entire backend arc from Section 4 is done. That original three-step arc this section used to describe —
 
 ```text
 POST /scrape → validate → fetch → parse → extract page title
@@ -2142,14 +2174,13 @@ POST /scrape → validate → fetch → parse → extract page title
                 JSON configuration → Scraper Engine → Extractor → Transformers → JSON
 ```
 
-— is exactly what exists today, plus pagination, dynamic (Playwright) sites, standard error codes, a security-hardening pass (SSRF/private-network blocking, timeouts, redirect limits, browser reuse) that came out of an audit rather than a planned phase, a website management API with authenticated writes, an optional SQLite storage backend behind the same repository interface as the JSON files, an in-memory TTL cache so repeated identical requests don't re-scrape the same page, and opt-in async jobs (`"async": true` + `GET /jobs/:id`) so a slow browser-mode scrape doesn't block the caller.
+— is exactly what exists today, plus pagination, dynamic (Playwright) sites, standard error codes, a security-hardening pass (SSRF/private-network blocking, timeouts, redirect limits, browser reuse) that came out of an audit rather than a planned phase, a website management API with authenticated writes, an optional SQLite storage backend behind the same repository interface as the JSON files, an in-memory TTL cache so repeated identical requests don't re-scrape the same page, opt-in async jobs (`"async": true` + `GET /jobs/:id`) so a slow browser-mode scrape doesn't block the caller, and — opt-in on top of that — a real Redis-backed queue (`QUEUE_DRIVER=bullmq`) with independently-scalable worker processes.
 
-Genuinely next, in order, per the phase list in Section 4 (Phases 8–11 are now also done — see their sections above):
+Genuinely next, in order, per the phase list in Section 4 — everything remaining is Unity-facing, not backend:
 
 ```text
-Phase 12 → Queue system (BullMQ + Redis, only once jobs exist)
 Phase 13 → Unity client
 Phase 14 → Admin UI
 ```
 
-Also still open, noted but deliberately deferred (see each phase's notes above for why): nested objects/sub-items in extraction, `pagination.mode: "click"` / `"urlPattern"` for pagination that isn't link-based, rate limiting, DNS-rebinding protection in browser mode specifically (§29), and a configuration version-history/rollback API (Phase 9 tracks a version number on every save, but nothing reads it back yet).
+Also still open, noted but deliberately deferred (see each phase's notes above for why): nested objects/sub-items in extraction, `pagination.mode: "click"` / `"urlPattern"` for pagination that isn't link-based, rate limiting, DNS-rebinding protection in browser mode specifically (§29), a configuration version-history/rollback API (Phase 9 tracks a version number on every save, but nothing reads it back yet), and a shared (Redis-backed) cache for `QUEUE_DRIVER=bullmq` mode (Phase 10's cache is per-process, so separate worker processes don't currently share cache hits — see Phase 12's notes).

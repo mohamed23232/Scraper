@@ -1,13 +1,13 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { JobStore } from "../../core/jobs/JobStore.js";
+import type { JobQueue } from "../../core/jobs/JobQueue.js";
 import { ScraperError } from "../../core/errors/ScraperError.js";
 
 const jobIdParamSchema = z.object({
     id: z.string().min(1)
 });
 
-export async function jobsRoute(app: FastifyInstance, jobStore: JobStore) {
+export async function jobsRoute(app: FastifyInstance, jobQueue: JobQueue) {
 
     app.get("/jobs/:id", async (request, reply) => {
 
@@ -17,7 +17,7 @@ export async function jobsRoute(app: FastifyInstance, jobStore: JobStore) {
             throw new ScraperError("INVALID_CONFIGURATION", "Invalid job id", params.error.issues);
         }
 
-        const job = jobStore.get(params.data.id);
+        const job = await jobQueue.getStatus(params.data.id);
 
         if (!job) {
             throw new ScraperError("JOB_NOT_FOUND", `Job not found: ${params.data.id}`);
