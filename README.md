@@ -65,6 +65,10 @@ CONFIG_STORAGE=sqlite npm run dev
 
 Both backends implement the same `ConfigRepository` interface and are interchangeable — `/scrape` and `/websites` behave identically either way.
 
+## Admin UI
+
+A browser-based dashboard for building, testing, and saving website configs without hand-writing JSON: `http://localhost:3000/admin/` (served by the same server, no separate setup). Build a config in the form, click **Test Scrape** to run it for real and see the results in a table, then **Save**. Enter your `ADMIN_API_KEY` in the bar at the top if one is set (only needed for Save/Delete — testing and browsing don't require it).
+
 ## Scaling async jobs with a real queue
 
 By default, `"async": true` jobs run in-process (no setup needed). To hand them off to a real Redis-backed queue processed by separate worker process(es) instead:

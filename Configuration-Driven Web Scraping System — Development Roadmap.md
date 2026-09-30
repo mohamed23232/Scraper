@@ -1599,6 +1599,8 @@ src/
 
 # Phase 13 — Unity Client
 
+**Status: Complete**, built in a separate Unity 6 project (`E:\UnityProjects\Studying\Studying`, not this repo) since that's where the client actually runs. `ScraperClient` (`Assets/_Project/_Scripts/Networking/Scraper/`) exposes `ScrapeWebsite<T>`/`ScrapeWebsiteRaw` (synchronous) and `ScrapeWebsiteAsync<T>`/`ScrapeWebsiteRawAsync` (transparently uses this backend's job queue — enqueue+poll+backoff hidden inside one call), plus read-only `ListWebsites`/`GetWebsite` and admin-only `CreateWebsite`/`UpdateWebsite`/`DeleteWebsite`. Uses `UnityWebRequest` + `Newtonsoft.Json` (matching the user's existing conventions in other Unity projects) and a `ScrapeResult<T>` success/error wrapper instead of exceptions for expected failures — Unity code never constructs a selector or field config, only ever a website id, enforced at the type level (see §24 below, which this implements literally). Verified against the real running backend via a demo scene exercising all four call paths (typed success, raw/dynamic success, expected error, async job path).
+
 Once the backend is stable, create a Unity client.
 
 For example:
@@ -1677,6 +1679,10 @@ This means you can change the website configuration without rebuilding your Unit
 
 # Phase 14 — Admin UI
 
+**Status: Complete**, with one deliberate scope change from the original mockup below, agreed with the user beforehand: no visual point-and-click element picker (that requires proxying and sandboxing arbitrary third-party HTML into an iframe — real security surface, since a malicious target site's script could otherwise run same-origin as the admin panel). Instead: a form for building the config (item selector, a dynamic fields table with a full transform-step editor, pagination/scraper/cache as collapsible sections), a **Test Scrape** button against the real `/scrape` endpoint with an auto-generating results table (columns = union of keys across returned items, since fields are dynamic per website) and a raw-JSON escape hatch, and **Save** (always `PUT /websites/:id` — idempotent create-or-replace, so no create-vs-update branch is needed in the UI). Finding selectors is still a manual DevTools step (§7.2 of `PROJECT-OVERVIEW.md`) — deferred, not forgotten.
+
+Built as vanilla HTML/CSS/JS with no build step (`public/admin/`, ~10 small ES modules), served directly by this Fastify server via `@fastify/static` at `/admin/` (`src/api/staticAssets.ts`) — no new API endpoints, the admin JS calls the existing `/scrape` and `/websites*` endpoints directly, same-origin. The admin API key (for the write endpoints only) lives in the browser's `sessionStorage`, entered once per tab. Verified against the real running backend: static serving, `GET /websites` listing the real saved configs, `POST /scrape` with the exact inline-config body the form builds (both the `example` and `wikipedia` fixtures, proving the results table's columns are genuinely dynamic, not hardcoded), the `SELECTOR_NOT_FOUND` error path, and a full save → relist → reload → edit → delete cycle via `PUT`/`DELETE /websites/:id`.
+
 After the backend works, build a web dashboard for configuring websites.
 
 Possible interface:
@@ -1719,14 +1725,21 @@ This allows you to create configurations visually instead of manually editing JS
 
 # 25. Project Structure
 
-**Status: below is the actual current tree**, not an aspirational target — kept up to date as phases land. `api/routes/jobs.ts` (Phase 11 — scraping jobs) and `workers/` (Phase 12 — queue system) from the original plan don't exist yet; `strategies/ApiStrategy.ts` (a JSON/API-only scraper strategy) was never called for by any phase actually implemented and was dropped from the plan.
+**Status: below is the actual current tree**, not an aspirational target — kept up to date as phases land. `api/routes/jobs.ts` (Phase 11 — scraping jobs) and `workers/` (Phase 12 — queue system) from the original plan don't exist yet; `strategies/ApiStrategy.ts` (a JSON/API-only scraper strategy) was never called for by any phase actually implemented and was dropped from the plan. `public/admin/` (Phase 14's Admin UI, plain HTML/CSS/JS, no build step) and `src/api/staticAssets.ts` (serves it) are new since Phase 14.
 
 ```text
 scraper-system/
 │
+├── public/admin/                       (Phase 14 — served at /admin/ by staticAssets.ts, no build step)
+│   ├── index.html
+│   ├── css/styles.css
+│   └── js/                             (main, api, auth, state, fieldsTable, transformEditor,
+│                                         editorView, resultsView, resultsTable, listView — one ES module each)
+│
 ├── src/
 │   │
 │   ├── api/
+│   │   ├── staticAssets.ts             (Phase 14: registers @fastify/static for public/admin at /admin/)
 │   │   ├── routes/
 │   │   │   ├── scrape.ts
 │   │   │   ├── websites.ts             (Phase 8: GET/POST/PUT/DELETE /websites)
@@ -1976,11 +1989,11 @@ Follow this exact order.
 ## Milestone 12
 
 ```text
-[ ] Unity client
-[ ] Authentication if needed
-[ ] Unity models
-[ ] API integration
-[ ] Error handling
+[x] Unity client
+[x] Authentication if needed   (admin-only methods send Authorization: Bearer <key>; core scraping calls need none)
+[x] Unity models
+[x] API integration
+[x] Error handling              (ScrapeResult<T> success/error wrapper, no exceptions for expected failures)
 ```
 
 ---
@@ -2164,7 +2177,7 @@ Also respect the target site's terms, robots policies where applicable, copyrigh
 
 # 30. Current Status and What's Actually Next
 
-**Phases 1–12 are complete and tested** (see each phase's own "Status" line above, and `tests/`) — the entire backend arc from Section 4 is done. That original three-step arc this section used to describe —
+**All 14 phases are complete.** Phases 1–12 (the backend, in this repo, tested in `tests/`), Phase 13 (the Unity client, in a separate Unity project — see its own Status line above), and Phase 14 (the Admin UI, in this repo's `public/admin/`) are all done. The original three-step arc this section used to describe —
 
 ```text
 POST /scrape → validate → fetch → parse → extract page title
@@ -2176,11 +2189,4 @@ POST /scrape → validate → fetch → parse → extract page title
 
 — is exactly what exists today, plus pagination, dynamic (Playwright) sites, standard error codes, a security-hardening pass (SSRF/private-network blocking, timeouts, redirect limits, browser reuse) that came out of an audit rather than a planned phase, a website management API with authenticated writes, an optional SQLite storage backend behind the same repository interface as the JSON files, an in-memory TTL cache so repeated identical requests don't re-scrape the same page, opt-in async jobs (`"async": true` + `GET /jobs/:id`) so a slow browser-mode scrape doesn't block the caller, and — opt-in on top of that — a real Redis-backed queue (`QUEUE_DRIVER=bullmq`) with independently-scalable worker processes.
 
-Genuinely next, in order, per the phase list in Section 4 — everything remaining is Unity-facing, not backend:
-
-```text
-Phase 13 → Unity client
-Phase 14 → Admin UI
-```
-
-Also still open, noted but deliberately deferred (see each phase's notes above for why): nested objects/sub-items in extraction, `pagination.mode: "click"` / `"urlPattern"` for pagination that isn't link-based, rate limiting, DNS-rebinding protection in browser mode specifically (§29), a configuration version-history/rollback API (Phase 9 tracks a version number on every save, but nothing reads it back yet), and a shared (Redis-backed) cache for `QUEUE_DRIVER=bullmq` mode (Phase 10's cache is per-process, so separate worker processes don't currently share cache hits — see Phase 12's notes).
+Nothing from the roadmap's original phase list remains. What's still open is scope deliberately deferred rather than unplanned work (see each phase's notes above for why): a visual point-and-click selector picker in the Admin UI (Phase 14 shipped a form-based builder instead — see its Status line), nested objects/sub-items in extraction, `pagination.mode: "click"` / `"urlPattern"` for pagination that isn't link-based, rate limiting, DNS-rebinding protection in browser mode specifically (§29), a configuration version-history/rollback API (Phase 9 tracks a version number on every save, but nothing reads it back yet), and a shared (Redis-backed) cache for `QUEUE_DRIVER=bullmq` mode (Phase 10's cache is per-process, so separate worker processes don't currently share cache hits — see Phase 12's notes).

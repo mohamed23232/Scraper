@@ -19,6 +19,7 @@ import { adminAuthWarningIfAny } from "./core/auth/adminAuth.js";
 import { scrapeRoute } from "./api/routes/scrape.js";
 import { websitesRoute } from "./api/routes/websites.js";
 import { jobsRoute } from "./api/routes/jobs.js";
+import { registerAdminStatic } from "./api/staticAssets.js";
 
 const app = Fastify({
     logger: true
@@ -61,6 +62,8 @@ app.register(async (app) => {
     await websitesRoute(app, configLoader);
     await jobsRoute(app, jobQueue);
 });
+
+await registerAdminStatic(app);
 
 app.addHook("onClose", async () => {
     await browserStrategy.close();
