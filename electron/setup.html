@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Scraper Admin — Setup</title>
+    <style>
+        :root { font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+        body { margin: 0; background: #f7f8fb; color: #1a1d29; }
+        main { max-width: 480px; margin: 0 auto; padding: 48px 24px; }
+        h1 { font-size: 20px; margin: 0 0 4px; }
+        .subtitle { color: #6b7280; font-size: 13px; margin: 0 0 28px; }
+        .card { background: #fff; border: 1px solid #e4e7ec; border-radius: 10px; padding: 20px; margin-bottom: 16px; }
+        .card h2 { font-size: 14px; margin: 0 0 12px; }
+        label { display: block; font-size: 12.5px; color: #6b7280; margin-bottom: 6px; font-weight: 500; }
+        .radio-row { display: flex; gap: 16px; margin-bottom: 14px; }
+        .radio-row label { display: flex; align-items: center; gap: 6px; font-size: 13.5px; color: #1a1d29; margin: 0; }
+        input[type="text"], input[type="password"] {
+            width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid #e4e7ec;
+            border-radius: 6px; font-size: 13.5px; margin-bottom: 14px;
+        }
+        input[type="text"]:focus, input[type="password"]:focus { outline: none; border-color: #4f46e5; }
+        .field-hint { font-size: 12px; color: #9aa1ae; margin-top: -10px; margin-bottom: 14px; }
+        button {
+            width: 100%; padding: 11px; border: none; border-radius: 7px; background: #4f46e5;
+            color: #fff; font-size: 14px; font-weight: 600; cursor: pointer;
+        }
+        button:disabled { opacity: 0.6; cursor: not-allowed; }
+        #status { margin-top: 16px; font-size: 13px; padding: 10px 14px; border-radius: 8px; display: none; }
+        #status.info { display: block; background: #eef2ff; color: #4338ca; }
+        #status.error { display: block; background: #fef1f2; color: #e11d48; }
+        #sqlite-fields.hidden { display: none; }
+        fieldset { border: none; padding: 0; margin: 0; }
+        fieldset:disabled { opacity: 0.55; }
+    </style>
+</head>
+<body>
+    <main>
+        <h1>Scraper Admin</h1>
+        <p class="subtitle">Configure how the backend runs on this machine, or leave everything as-is and just press Start.</p>
+
+        <fieldset id="form">
+            <div class="card">
+                <h2>Config storage</h2>
+                <div class="radio-row">
+                    <label><input type="radio" name="configStorage" value="file" checked> File (default)</label>
+                    <label><input type="radio" name="configStorage" value="sqlite"> SQLite</label>
+                </div>
+                <div id="sqlite-fields" class="hidden">
+                    <label for="databasePath">Database file path (optional)</label>
+                    <input type="text" id="databasePath" placeholder="data/configs.sqlite (default)">
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Authentication</h2>
+                <label for="adminApiKey">Admin API key (optional)</label>
+                <input type="password" id="adminApiKey" placeholder="leave blank for no authentication">
+                <div class="field-hint">Only needed to protect saving/deleting website configs. Safe to leave blank for local/personal use.</div>
+            </div>
+
+            <button id="start-btn" type="button">Start</button>
+        </fieldset>
+
+        <div id="status"></div>
+    </main>
+
+    <script src="setup.js"></script>
+</body>
+</html>

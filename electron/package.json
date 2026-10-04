@@ -1,0 +1,49 @@
+{
+  "name": "scraper-admin-desktop",
+  "version": "1.0.0",
+  "description": "Desktop shell for the Scraper Admin UI — auto-starts the backend and offers config storage / admin key setup on launch.",
+  "main": "main.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "electron .",
+    "prepare-backend": "node scripts/prepare-backend.mjs",
+    "dist": "npm run prepare-backend && electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^44.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "dependencies": {
+    "electron-store": "^8.2.0"
+  },
+  "build": {
+    "appId": "com.scrapingsystem.admindesktop",
+    "productName": "Scraper Admin",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "setup.html",
+      "setup.js",
+      "!backend-dist/**/node_modules/**/*.md",
+      "!backend-dist/**/node_modules/**/*.map"
+    ],
+    "extraResources": [
+      {
+        "from": "backend-dist",
+        "to": "backend"
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "signAndEditExecutable": false
+    },
+    "forceCodeSigning": false,
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

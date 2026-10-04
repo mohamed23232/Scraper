@@ -8,6 +8,8 @@ node_modules/
 
 # Build output
 dist/
+electron/backend-dist/
+electron/release/
 
 # Logs
 logs/

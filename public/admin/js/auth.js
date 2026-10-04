@@ -46,6 +46,28 @@ export function mountAuthBar(container) {
     input.addEventListener("change", () => {
         setAdminApiKey(input.value.trim());
     });
+
+    seedFromElectronIfAvailable(input, status);
+}
+
+/**
+ * When running inside the Electron desktop shell (see electron/preload.js), the admin key set on
+ * the setup screen is already known to the backend process — pull it in here too, so it doesn't
+ * have to be retyped into the web page. A no-op in a plain browser (window.scraperAdmin won't exist)
+ * and never overwrites a key the user already typed into this session themselves.
+ */
+async function seedFromElectronIfAvailable(input, status) {
+    if (typeof window === "undefined" || !window.scraperAdmin || getAdminApiKey()) {
+        return;
+    }
+
+    const key = await window.scraperAdmin.getAdminApiKey();
+
+    if (key && !getAdminApiKey()) {
+        setAdminApiKey(key);
+        input.value = key;
+        status.classList.add("set");
+    }
 }
 
 function escapeAttr(value) {
