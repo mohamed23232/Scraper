@@ -1,5 +1,6 @@
 import { escapeHtml } from "./utils.js";
 import { renderResultsTable } from "./resultsTable.js";
+import { icon } from "./icons.js";
 
 let lastResponse = null;
 let rawVisible = false;
@@ -52,7 +53,7 @@ function renderSuccess(response) {
             ${paginationBadges}
         </div>
         ${Array.isArray(meta.warnings) && meta.warnings.length > 0 ? renderWarnings(meta.warnings) : ""}
-        ${renderResultsTable(items)}
+        <div class="card scroll-x results-table-wrap">${renderResultsTable(items)}</div>
         ${renderRawToggle()}
     `;
 }
@@ -71,11 +72,16 @@ function renderFailure(response) {
 
     return `
         <div class="error-banner">
-            <span class="badge badge-error">${escapeHtml(error.code)}</span>
-            <span>${escapeHtml(error.message)}</span>
-            ${error.details !== undefined
-                ? `<details><summary>Details</summary><pre>${escapeHtml(JSON.stringify(error.details, null, 2))}</pre></details>`
-                : ""}
+            <span class="icon">${icon("alertTriangle")}</span>
+            <div class="content">
+                <div class="msg-row">
+                    <span class="badge badge-error">${escapeHtml(error.code)}</span>
+                    <span>${escapeHtml(error.message)}</span>
+                </div>
+                ${error.details !== undefined
+                    ? `<details><summary>Details</summary><pre class="raw-json">${escapeHtml(JSON.stringify(error.details, null, 2))}</pre></details>`
+                    : ""}
+            </div>
         </div>
         ${renderRawToggle()}
     `;

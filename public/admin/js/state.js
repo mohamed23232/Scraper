@@ -20,12 +20,14 @@ export function emptyFieldRow() {
 
 export function createEmptyConfigState() {
     return {
+        mode: "structured", // "structured" (item + fields, savable) or "flat" (single value, test-only)
         id: "",
         name: "",
         startUrl: "",
         scraper: { type: "static", waitFor: "", timeout: "", blockResources: false },
         item: { selector: "", allowEmpty: false },
         fields: [emptyFieldRow()],
+        flat: emptyFieldRow(), // reuses the field-row shape; only selector/extract/attribute/transform are used
         pagination: {
             enabled: false, nextSelector: "", maxPages: "", maxItems: "",
             maxDurationMs: "", delayMs: "", failOnPageError: false
@@ -79,6 +81,31 @@ function transformRowToStep(row) {
     return step;
 }
 
+function fieldConfigFromRow(row) {
+    const field = { selector: row.selector.trim(), extract: row.extract };
+
+    if (row.extract === "attribute" && row.attribute.trim()) {
+        field.attribute = row.attribute.trim();
+    }
+    if (row.multiple) {
+        field.multiple = true;
+    }
+    if (!row.required) {
+        field.required = false;
+    }
+    if (row.default !== "" && row.default !== undefined) {
+        field.default = parseLooseJSON(row.default);
+    }
+    if (row.type) {
+        field.type = row.type;
+    }
+    if (row.transform && row.transform.length > 0) {
+        field.transform = row.transform.map(transformRowToStep);
+    }
+
+    return field;
+}
+
 export function fieldsRecordFromRows(rows) {
     const record = {};
 
@@ -87,29 +114,7 @@ export function fieldsRecordFromRows(rows) {
         if (!name) {
             continue;
         }
-
-        const field = { selector: row.selector.trim(), extract: row.extract };
-
-        if (row.extract === "attribute" && row.attribute.trim()) {
-            field.attribute = row.attribute.trim();
-        }
-        if (row.multiple) {
-            field.multiple = true;
-        }
-        if (!row.required) {
-            field.required = false;
-        }
-        if (row.default !== "" && row.default !== undefined) {
-            field.default = parseLooseJSON(row.default);
-        }
-        if (row.type) {
-            field.type = row.type;
-        }
-        if (row.transform && row.transform.length > 0) {
-            field.transform = row.transform.map(transformRowToStep);
-        }
-
-        record[name] = field;
+        record[name] = fieldConfigFromRow(row);
     }
 
     return record;
@@ -171,6 +176,24 @@ export function buildInlineScrapeRequest(state, testUrl) {
     return { url, scraper: buildScraperOptions(state.scraper), config };
 }
 
+/** The "flat" shape: {url, selector, extract, attribute?, transform?} — no item/fields wrapper, no pagination. Test-only; the backend has no way to save this as a reusable website config. */
+export function buildFlatScrapeRequest(state, testUrl) {
+    const url = (testUrl && testUrl.trim()) || state.startUrl.trim();
+    const field = fieldConfigFromRow(state.flat);
+
+    const body = {
+        url,
+        selector: field.selector,
+        extract: field.extract,
+        scraper: buildScraperOptions(state.scraper)
+    };
+    if (field.attribute) body.attribute = field.attribute;
+    if (field.transform) body.transform = field.transform;
+    if (state.cache.enabled) body.cache = buildCachePayload(state.cache);
+
+    return body;
+}
+
 export function buildSavedConfigPayload(state) {
     const payload = {
         id: state.id.trim(),
@@ -190,6 +213,8 @@ export function buildSavedConfigPayload(state) {
 
 export function loadConfigIntoState(config) {
     return {
+        mode: "structured", // saved website configs are always item+fields — flat requests can't be saved
+        flat: emptyFieldRow(),
         id: config.id ?? "",
         name: config.name ?? "",
         startUrl: config.startUrl ?? "",
@@ -225,13 +250,24 @@ export function loadConfigIntoState(config) {
 
 export function validateForTest(state) {
     const errors = [];
-    if (!state.item.selector.trim()) errors.push("Item selector is required.");
-    if (state.fields.every((f) => !f.name.trim())) errors.push("At least one field with a name is required.");
+
     if (!state.startUrl.trim()) errors.push("Start URL is required (used when no Test URL is given).");
+
+    if (state.mode === "flat") {
+        if (!state.flat.selector.trim()) errors.push("Selector is required.");
+    } else {
+        if (!state.item.selector.trim()) errors.push("Item selector is required.");
+        if (state.fields.every((f) => !f.name.trim())) errors.push("At least one field with a name is required.");
+    }
+
     return errors;
 }
 
 export function validateForSave(state) {
+    if (state.mode === "flat") {
+        return ["Flat requests can't be saved as a reusable website config — switch to \"Item + Fields\" mode to save."];
+    }
+
     const errors = validateForTest(state);
     if (!/^[a-zA-Z0-9_-]+$/.test(state.id.trim())) {
         errors.push("Id must contain only letters, digits, '-' and '_'.");

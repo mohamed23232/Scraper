@@ -1,4 +1,5 @@
 import { escapeHtml } from "./utils.js";
+import { icon } from "./icons.js";
 
 export const TRANSFORM_NAMES = ["trim", "removeCurrency", "parseNumber", "absoluteUrl", "regex", "replace", "default"];
 
@@ -29,7 +30,7 @@ export function renderTransformPanel(fieldRow) {
     return `
         <div class="transform-panel">
             <div class="transform-steps">${steps || '<p class="muted">No transforms — value is used as-is.</p>'}</div>
-            <button type="button" class="btn-small" data-action="add-transform" data-row-id="${fieldRow.rowId}">+ Add transform step</button>
+            <button type="button" class="btn-small" data-action="add-transform" data-row-id="${fieldRow.rowId}">${icon("plus", 13)} Add transform step</button>
         </div>
     `;
 }
@@ -44,9 +45,11 @@ function renderStep(rowId, step, index, total) {
                 ${TRANSFORM_NAMES.map((n) => `<option value="${n}" ${n === step.name ? "selected" : ""}>${n}</option>`).join("")}
             </select>
             ${paramInputs}
-            <button type="button" title="Move up" data-action="move-transform-up" data-row-id="${rowId}" data-step-index="${index}" ${index === 0 ? "disabled" : ""}>&#9650;</button>
-            <button type="button" title="Move down" data-action="move-transform-down" data-row-id="${rowId}" data-step-index="${index}" ${index === total - 1 ? "disabled" : ""}>&#9660;</button>
-            <button type="button" class="btn-danger" title="Remove step" data-action="remove-transform" data-row-id="${rowId}" data-step-index="${index}">&times;</button>
+            <span class="step-actions">
+                <button type="button" class="btn-ghost btn-icon" style="transform:rotate(-90deg)" title="Move up" data-action="move-transform-up" data-row-id="${rowId}" data-step-index="${index}" ${index === 0 ? "disabled" : ""}>${icon("chevron", 13)}</button>
+                <button type="button" class="btn-ghost btn-icon" style="transform:rotate(90deg)" title="Move down" data-action="move-transform-down" data-row-id="${rowId}" data-step-index="${index}" ${index === total - 1 ? "disabled" : ""}>${icon("chevron", 13)}</button>
+                <button type="button" class="btn-ghost btn-icon" title="Remove step" data-action="remove-transform" data-row-id="${rowId}" data-step-index="${index}">${icon("x", 13)}</button>
+            </span>
         </div>
     `;
 }

@@ -1,3 +1,5 @@
+import { icon } from "./icons.js";
+
 const STORAGE_KEY = "admin_api_key";
 
 export function getAdminApiKey() {
@@ -21,15 +23,28 @@ export function setAdminApiKey(value) {
 }
 
 export function mountAuthBar(container) {
+    const hasKey = !!getAdminApiKey();
+
     container.innerHTML = `
-        <label class="auth-bar">
+        <label class="auth-bar" title="Only needed for Save and Delete — testing and browsing don't require it">
+            <span class="key-status ${hasKey ? "set" : ""}" id="key-status"></span>
             Admin API Key
-            <input type="password" id="admin-api-key-input" placeholder="only needed to save/delete" value="${escapeAttr(getAdminApiKey())}">
+            <span class="key-field">
+                <span class="icon">${icon("key", 14)}</span>
+                <input type="password" id="admin-api-key-input" placeholder="only needed to save/delete" value="${escapeAttr(getAdminApiKey())}">
+            </span>
         </label>
     `;
 
-    container.querySelector("#admin-api-key-input").addEventListener("change", (event) => {
-        setAdminApiKey(event.target.value.trim());
+    const input = container.querySelector("#admin-api-key-input");
+    const status = container.querySelector("#key-status");
+
+    input.addEventListener("input", () => {
+        status.classList.toggle("set", !!input.value.trim());
+    });
+
+    input.addEventListener("change", () => {
+        setAdminApiKey(input.value.trim());
     });
 }
 

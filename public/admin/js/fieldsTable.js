@@ -1,6 +1,7 @@
 import { escapeHtml } from "./utils.js";
 import { emptyFieldRow } from "./state.js";
 import { renderTransformPanel, applyTransformEvent } from "./transformEditor.js";
+import { icon } from "./icons.js";
 
 const EXTRACT_TYPES = ["text", "html", "attribute"];
 const OUTPUT_TYPES = ["", "string", "number", "boolean", "url"];
@@ -14,18 +15,20 @@ const OUTPUT_TYPES = ["", "string", "number", "boolean", "url"];
 export function mountFieldsTable(container, fields) {
 
     container.innerHTML = `
-        <table class="fields-table">
-            <thead>
-                <tr>
-                    <th>Name</th><th>Selector</th><th>Extract</th><th>Attribute</th>
-                    <th title="Return every match as an array">Multi</th>
-                    <th title="Fail if not found (unchecked = use Default instead)">Req</th>
-                    <th>Default</th><th>Type</th><th>Transforms</th><th></th>
-                </tr>
-            </thead>
-            <tbody></tbody>
-        </table>
-        <button type="button" class="btn-small" data-action="add-field">+ Add Field</button>
+        <div class="fields-table-wrap scroll-x">
+            <table class="fields-table">
+                <thead>
+                    <tr>
+                        <th>Name</th><th>Selector</th><th>Extract</th><th>Attribute</th>
+                        <th title="Return every match as an array">Multi</th>
+                        <th title="Fail if not found (off = use Default instead)">Req</th>
+                        <th>Default</th><th>Type</th><th>Transforms</th><th></th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+        <button type="button" class="btn-small add-row-btn" data-action="add-field">${icon("plus", 14)} Add Field</button>
     `;
 
     const tbody = container.querySelector("tbody");
@@ -106,10 +109,19 @@ export function mountFieldsTable(container, fields) {
     repaint();
 }
 
+function miniToggle(field, rowId, checked) {
+    return `
+        <span class="toggle">
+            <input type="checkbox" data-field="${field}" data-row-id="${rowId}" ${checked ? "checked" : ""}>
+            <span class="track"></span>
+        </span>
+    `;
+}
+
 function rowHtml(row) {
     const attributeCell = row.extract === "attribute"
         ? `<input type="text" data-field="attribute" data-row-id="${row.rowId}" value="${escapeHtml(row.attribute)}" placeholder="e.g. href">`
-        : `<span class="muted">—</span>`;
+        : `<span class="faint">&mdash;</span>`;
 
     const transformRow = row.expanded
         ? `<tr class="transform-row"><td></td><td colspan="9">${renderTransformPanel(row)}</td></tr>`
@@ -125,16 +137,16 @@ function rowHtml(row) {
                 </select>
             </td>
             <td>${attributeCell}</td>
-            <td class="center"><input type="checkbox" data-field="multiple" data-row-id="${row.rowId}" ${row.multiple ? "checked" : ""}></td>
-            <td class="center"><input type="checkbox" data-field="required" data-row-id="${row.rowId}" ${row.required ? "checked" : ""}></td>
+            <td class="center">${miniToggle("multiple", row.rowId, row.multiple)}</td>
+            <td class="center">${miniToggle("required", row.rowId, row.required)}</td>
             <td><input type="text" data-field="default" data-row-id="${row.rowId}" value="${escapeHtml(row.default)}" placeholder="e.g. false"></td>
             <td>
                 <select data-field="type" data-row-id="${row.rowId}">
                     ${OUTPUT_TYPES.map((t) => `<option value="${t}" ${t === row.type ? "selected" : ""}>${t || "(none)"}</option>`).join("")}
                 </select>
             </td>
-            <td><button type="button" class="btn-small" data-action="toggle-transforms" data-row-id="${row.rowId}">Transforms (${row.transform.length})</button></td>
-            <td><button type="button" class="btn-danger" data-action="remove-field" data-row-id="${row.rowId}" title="Remove field">&times;</button></td>
+            <td><button type="button" class="btn-small" data-action="toggle-transforms" data-row-id="${row.rowId}">${icon("sliders", 13)} ${row.transform.length}</button></td>
+            <td><button type="button" class="btn-ghost btn-icon" data-action="remove-field" data-row-id="${row.rowId}" title="Remove field">${icon("trash", 15)}</button></td>
         </tr>
         ${transformRow}
     `;

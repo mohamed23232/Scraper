@@ -43,6 +43,13 @@ export function renderResultsTable(items) {
         return `<p class="muted">No items returned.</p>`;
     }
 
+    // Flat-mode responses are arrays of plain values (strings/numbers/booleans), not objects —
+    // give them a single implicit "Value" column instead of the object-key-union logic below.
+    const isObjectRows = items.every((item) => item && typeof item === "object" && !Array.isArray(item));
+    if (!isObjectRows) {
+        return renderScalarTable(items);
+    }
+
     const columns = buildColumnUnion(items);
 
     const head = columns.map((c) => `<th>${escapeHtml(c)}</th>`).join("");
@@ -58,6 +65,20 @@ export function renderResultsTable(items) {
     return `
         <table class="results-table">
             <thead><tr>${head}</tr></thead>
+            <tbody>${rows}</tbody>
+        </table>
+    `;
+}
+
+function renderScalarTable(items) {
+    const rows = items.map((item) => {
+        const { display, title, className } = formatCellValue(item);
+        return `<tr><td class="${className}" title="${escapeHtml(title)}">${display}</td></tr>`;
+    }).join("");
+
+    return `
+        <table class="results-table">
+            <thead><tr><th>Value</th></tr></thead>
             <tbody>${rows}</tbody>
         </table>
     `;

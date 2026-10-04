@@ -4,17 +4,30 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Scraper Admin</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%234f46e5' stroke-width='2.5' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M3 12h18'/%3E%3Cpath d='M12 3c2.8 2.6 4.2 5.8 4.2 9s-1.4 6.4-4.2 9c-2.8-2.6-4.2-5.8-4.2-9s1.4-6.4 4.2-9z'/%3E%3C/svg%3E">
     <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
     <header class="app-header">
-        <h1>Scraper Admin</h1>
+        <div class="brand">
+            <span class="icon" id="brand-icon"></span>
+            <div>
+                <h1>Scraper Admin</h1>
+                <div class="tagline">Build, test, and save scraping configs</div>
+            </div>
+        </div>
         <div id="auth-bar"></div>
     </header>
+
+    <nav class="main-nav">
+        <button type="button" class="nav-tab active" data-nav="websites">Websites</button>
+        <button type="button" class="nav-tab" data-nav="guide">Guide</button>
+    </nav>
 
     <main>
         <section id="view-list"></section>
         <section id="view-editor" hidden></section>
+        <section id="view-guide" hidden></section>
     </main>
 
     <script type="module" src="js/main.js"></script>
