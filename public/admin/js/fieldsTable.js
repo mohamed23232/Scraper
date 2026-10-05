@@ -111,10 +111,10 @@ export function mountFieldsTable(container, fields) {
 
 function miniToggle(field, rowId, checked) {
     return `
-        <span class="toggle">
+        <label class="toggle">
             <input type="checkbox" data-field="${field}" data-row-id="${rowId}" ${checked ? "checked" : ""}>
             <span class="track"></span>
-        </span>
+        </label>
     `;
 }
 
